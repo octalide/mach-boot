@@ -1,0 +1,5 @@
+out/
+.clangd
+.vscode
+.DS_Store
+Thumbs.db

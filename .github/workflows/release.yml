@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Build cmach
+        run: make
+
+      - name: Strip and rename binary
+        run: |
+          strip out/bin/cmach
+          cp out/bin/cmach out/bin/cmach-linux-x86_64
+
+      - name: Upload release binary
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/bin/cmach-linux-x86_64
+          body: |
+            Pre-built bootstrap compiler for mach.
+
+            Download `cmach`, make it executable, and use it to build mach:
+            ```bash
+            chmod +x cmach
+            CMACH=./cmach make
+            ```

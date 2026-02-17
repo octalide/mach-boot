@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Build cmach
+        run: make
+
+      - name: Smoke test
+        run: ./out/bin/cmach help
