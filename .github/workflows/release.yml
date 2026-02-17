@@ -20,15 +20,13 @@ jobs:
       - name: Build cmach
         run: make
 
-      - name: Strip and rename binary
-        run: |
-          strip out/bin/cmach
-          cp out/bin/cmach out/bin/cmach-linux-x86_64
+      - name: Strip binary
+        run: strip out/bin/cmach
 
       - name: Upload release binary
         uses: softprops/action-gh-release@v2
         with:
-          files: out/bin/cmach-linux-x86_64
+          files: out/bin/cmach
           body: |
             Pre-built bootstrap compiler for mach.
 
