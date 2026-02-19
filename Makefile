@@ -20,7 +20,7 @@ CMACH := $(BIN)/cmach
 PREFIX ?= /usr/local
 DESTDIR ?=
 
-.PHONY: all clean install
+.PHONY: all clean install uninstall
 
 all: $(CMACH)
 
@@ -47,3 +47,7 @@ install: $(CMACH)
 	@install -d $(DESTDIR)$(PREFIX)/bin
 	@install -m 755 $(CMACH) $(DESTDIR)$(PREFIX)/bin/cmach
 	@echo "installed cmach to $(DESTDIR)$(PREFIX)/bin/cmach"
+
+uninstall:
+	@rm -f $(DESTDIR)$(PREFIX)/bin/cmach
+	@echo "uninstalled cmach from $(DESTDIR)$(PREFIX)/bin/cmach"

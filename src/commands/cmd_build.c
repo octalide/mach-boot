@@ -35,6 +35,7 @@ void cmd_build_help(FILE *stream)
     fprintf(stream, "\n");
     fprintf(stream, "options:\n");
     fprintf(stream, "  --target <name>      select target from mach.toml (required for projects)\n");
+    fprintf(stream, "  --artifacts <name>   override artifacts directory (relative to dir_out)\n");
     fprintf(stream, "  -o <file>            output file (executable or object)\n");
     fprintf(stream, "  -m <path>            set module path (e.g. 'std.print')\n");
     fprintf(stream, "  -I n=dir             map module prefix 'n' to base directory 'dir'\n");
@@ -50,8 +51,9 @@ int cmd_build_handle(int argc, char **argv)
         return 1;
     }
 
-    const char *input_file  = argv[2];
-    const char *output_file = NULL;
+    const char *input_file      = argv[2];
+    const char *output_file     = NULL;
+    const char *artifacts_override = NULL;
 
     // extra module roots for single-file mode: -I prefix=dir
     char *include_prefixes[64];
@@ -64,6 +66,10 @@ int cmd_build_handle(int argc, char **argv)
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc)
         {
             output_file = argv[++i];
+        }
+        else if (strcmp(argv[i], "--artifacts") == 0 && i + 1 < argc)
+        {
+            artifacts_override = argv[++i];
         }
         else if (strcmp(argv[i], "-I") == 0 && i + 1 < argc)
         {
@@ -106,9 +112,10 @@ int cmd_build_handle(int argc, char **argv)
     }
 
     // check if input is a directory
-    bool        is_project    = is_directory(input_file);
-    const char *project_root  = is_project ? input_file : NULL;
-    const char *target_binary = NULL;
+    bool        is_project      = is_directory(input_file);
+    const char *project_root    = is_project ? input_file : NULL;
+    const char *target_binary   = NULL;
+    const char *target_artifacts = NULL;
 
     // module resolution info (stored for sema)
     char   *project_id = NULL;
@@ -167,6 +174,16 @@ int cmd_build_handle(int argc, char **argv)
             target_binary = strdup(target->binary);
         }
 
+        // store artifacts directory (--artifacts override takes priority)
+        if (artifacts_override)
+        {
+            target_artifacts = artifacts_override;
+        }
+        else if (target->artifacts)
+        {
+            target_artifacts = strdup(target->artifacts);
+        }
+
         // store module resolution info
         if (config->id)
         {
@@ -197,28 +214,29 @@ int cmd_build_handle(int argc, char **argv)
     // determine output file
     if (!output_file && is_project && project_root && target_binary)
     {
-        // build to out/<binary path> (binary is relative to out dir in mach.toml)
-        // e.g. if binary = "linux/bin/mach", we build to "<project_root>/out/linux/bin/mach"
+        // build to <dir_out>/<binary path>
+        const char *dir_out = (config && config->dir_out) ? config->dir_out : "out";
         char out_path[1024];
-        snprintf(out_path, sizeof(out_path), "%s/out/%s", project_root, target_binary);
+        snprintf(out_path, sizeof(out_path), "%s/%s/%s", project_root, dir_out, target_binary);
         output_file = strdup(out_path);
+    }
+    else if (!output_file)
+    {
+        output_file = "output";
+    }
 
-        // create output directory if it doesn't exist
+    // ensure output directory exists
+    {
         char *out_dir  = strdup(output_file);
         char *last_sep = strrchr(out_dir, '/');
         if (last_sep)
         {
             *last_sep = '\0';
-            // create directory recursively
             char mkdir_cmd[1536];
             snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p %s 2>/dev/null", out_dir);
             system(mkdir_cmd);
         }
         free(out_dir);
-    }
-    else if (!output_file)
-    {
-        output_file = "output";
     }
 
     // read source file
@@ -379,7 +397,6 @@ int cmd_build_handle(int argc, char **argv)
         free(include_prefixes[i]);
         free(include_dirs[i]);
     }
-    free(project_id);
     free(src_root);
     free(dep_root);
 
@@ -441,31 +458,24 @@ int cmd_build_handle(int argc, char **argv)
 
     // emit object (ET_REL) first.
     // - single-file mode: output is the object at `-o` (or default "output")
-    // - project mode: emit to <out_dir>/obj/main.o, then link/archive
+    // - project mode: emit to <dir_out>/<artifacts>/obj/<id>.o, then link/archive
     const char *final_output = output_file;
     const char *obj_output   = output_file;
     char        obj_path[2048];
-    if (is_project)
+    if (is_project && project_root)
     {
-        // derive obj dir as sibling "obj" directory next to the binary
-        char *out_dir = strdup(output_file);
-        char *last_sep2 = strrchr(out_dir, '/');
-        if (last_sep2)
-        {
-            *last_sep2 = '\0';
-            char obj_dir[2048];
-            snprintf(obj_dir, sizeof(obj_dir), "%s/obj", out_dir);
-            // create obj directory
-            char mkdir_obj[2560];
-            snprintf(mkdir_obj, sizeof(mkdir_obj), "mkdir -p %s 2>/dev/null", obj_dir);
-            system(mkdir_obj);
-            snprintf(obj_path, sizeof(obj_path), "%s/main.o", obj_dir);
-        }
-        else
-        {
-            snprintf(obj_path, sizeof(obj_path), "%s.o", final_output);
-        }
-        free(out_dir);
+        const char *dir_out = (config && config->dir_out) ? config->dir_out : "out";
+        const char *artifacts = target_artifacts ? target_artifacts : "default";
+        const char *obj_name = project_id ? project_id : "output";
+
+        char obj_dir[2048];
+        snprintf(obj_dir, sizeof(obj_dir), "%s/%s/%s/obj", project_root, dir_out, artifacts);
+
+        char mkdir_obj[2560];
+        snprintf(mkdir_obj, sizeof(mkdir_obj), "mkdir -p %s 2>/dev/null", obj_dir);
+        system(mkdir_obj);
+
+        snprintf(obj_path, sizeof(obj_path), "%s/%s.o", obj_dir, obj_name);
         obj_output = obj_path;
     }
 
@@ -581,6 +591,7 @@ int cmd_build_handle(int argc, char **argv)
     parser_dnit(&parser);
     lexer_dnit(&lexer);
     free(source);
+    free(project_id);
 
     return 0;
 }
