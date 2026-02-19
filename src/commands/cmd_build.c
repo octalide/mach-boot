@@ -397,7 +397,6 @@ int cmd_build_handle(int argc, char **argv)
         free(include_prefixes[i]);
         free(include_dirs[i]);
     }
-    free(project_id);
     free(src_root);
     free(dep_root);
 
@@ -592,6 +591,7 @@ int cmd_build_handle(int argc, char **argv)
     parser_dnit(&parser);
     lexer_dnit(&lexer);
     free(source);
+    free(project_id);
 
     return 0;
 }
