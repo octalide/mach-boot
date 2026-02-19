@@ -459,7 +459,7 @@ int cmd_build_handle(int argc, char **argv)
 
     // emit object (ET_REL) first.
     // - single-file mode: output is the object at `-o` (or default "output")
-    // - project mode: emit to <dir_out>/<artifacts>/obj/main.o, then link/archive
+    // - project mode: emit to <dir_out>/<artifacts>/obj/<id>.o, then link/archive
     const char *final_output = output_file;
     const char *obj_output   = output_file;
     char        obj_path[2048];
@@ -467,6 +467,7 @@ int cmd_build_handle(int argc, char **argv)
     {
         const char *dir_out = (config && config->dir_out) ? config->dir_out : "out";
         const char *artifacts = target_artifacts ? target_artifacts : "default";
+        const char *obj_name = project_id ? project_id : "output";
 
         char obj_dir[2048];
         snprintf(obj_dir, sizeof(obj_dir), "%s/%s/%s/obj", project_root, dir_out, artifacts);
@@ -475,7 +476,7 @@ int cmd_build_handle(int argc, char **argv)
         snprintf(mkdir_obj, sizeof(mkdir_obj), "mkdir -p %s 2>/dev/null", obj_dir);
         system(mkdir_obj);
 
-        snprintf(obj_path, sizeof(obj_path), "%s/main.o", obj_dir);
+        snprintf(obj_path, sizeof(obj_path), "%s/%s.o", obj_dir, obj_name);
         obj_output = obj_path;
     }
 
