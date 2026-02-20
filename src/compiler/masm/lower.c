@@ -237,6 +237,7 @@ static inline MasmOperand frame_mem(LowerContext *ctx, int32_t offset, uint8_t s
 
 // forward decl (used by helpers below)
 static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, LowerContext *ctx);
+static bool eval_const_int(AstNode *expr, int64_t *out);
 
 static inline bool type_is_large_aggregate(Type *t, uint8_t ptr_size)
 {
@@ -1828,6 +1829,16 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
 
                 masm_section_append_inst(text, masm_inst_3(MASM_IR_LOAD, result, mem, masm_operand_type(tk)));
                 return result;
+            }
+        }
+
+        // try to fold immutable constants to immediates
+        if (expr->symbol && !expr->symbol->is_mutable && expr->symbol->kind == SYMBOL_VARIABLE)
+        {
+            int64_t folded;
+            if (expr->symbol->decl && eval_const_int(expr->symbol->decl->var_stmt.init, &folded))
+            {
+                return masm_operand_imm(folded);
             }
         }
 
@@ -3841,6 +3852,72 @@ Masm *masm_lower_module(AstNode *ast, SymbolTable *symbols)
     return masm;
 }
 
+// eval_const_int: recursively evaluate a constant integer expression.
+// handles literals, unary ops, binary ops, and ident/field references to other constants.
+static bool eval_const_int(AstNode *expr, int64_t *out)
+{
+    if (!expr) return false;
+
+    // integer literal
+    if (expr->kind == AST_EXPR_LIT && expr->lit_expr.kind == TOKEN_LIT_INT)
+    {
+        *out = (int64_t)expr->lit_expr.int_val;
+        return true;
+    }
+
+    // unary expression
+    if (expr->kind == AST_EXPR_UNARY)
+    {
+        int64_t inner;
+        if (!eval_const_int(expr->unary_expr.expr, &inner)) return false;
+        switch (expr->unary_expr.op)
+        {
+        case TOKEN_MINUS: *out = -inner; return true;
+        case TOKEN_TILDE: *out = ~inner; return true;
+        case TOKEN_BANG:  *out = (inner == 0); return true;
+        default: return false;
+        }
+    }
+
+    // binary expression
+    if (expr->kind == AST_EXPR_BINARY)
+    {
+        int64_t lv, rv;
+        if (!eval_const_int(expr->binary_expr.left, &lv)) return false;
+        if (!eval_const_int(expr->binary_expr.right, &rv)) return false;
+        switch (expr->binary_expr.op)
+        {
+        case TOKEN_PLUS:            *out = lv + rv; return true;
+        case TOKEN_MINUS:           *out = lv - rv; return true;
+        case TOKEN_STAR:            *out = lv * rv; return true;
+        case TOKEN_SLASH:           *out = (rv != 0) ? (lv / rv) : 0; return true;
+        case TOKEN_PERCENT:         *out = (rv != 0) ? (lv % rv) : 0; return true;
+        case TOKEN_AMPERSAND:       *out = lv & rv; return true;
+        case TOKEN_PIPE:            *out = lv | rv; return true;
+        case TOKEN_CARET:           *out = lv ^ rv; return true;
+        case TOKEN_LESS_LESS:       *out = lv << rv; return true;
+        case TOKEN_GREATER_GREATER: *out = lv >> rv; return true;
+        default: return false;
+        }
+    }
+
+    // ident or field access — follow symbol to declaration initializer
+    if (expr->kind == AST_EXPR_IDENT || expr->kind == AST_EXPR_FIELD)
+    {
+        Symbol *sym = expr->symbol;
+        if (sym && !sym->is_mutable && sym->decl)
+        {
+            AstNode *decl = sym->decl;
+            if ((decl->kind == AST_STMT_VAL || decl->kind == AST_STMT_VAR) && decl->var_stmt.init)
+            {
+                return eval_const_int(decl->var_stmt.init, out);
+            }
+        }
+    }
+
+    return false;
+}
+
 static void emit_global_data(Masm *masm, MasmSection *section, AstNode *expr, size_t size, ModuleCounters *counters)
 {
     if (!expr)
@@ -4026,40 +4103,23 @@ static void emit_global_data(Masm *masm, MasmSection *section, AstNode *expr, si
             }
         }
     }
-    else if (expr->kind == AST_EXPR_UNARY)
-    {
-        int64_t val = 0;
-        if (expr->unary_expr.op == TOKEN_MINUS && expr->unary_expr.expr->kind == AST_EXPR_LIT && expr->unary_expr.expr->lit_expr.kind == TOKEN_LIT_INT)
-        {
-            val = -((int64_t)expr->unary_expr.expr->lit_expr.int_val);
-        }
-        size_t write_size = size > 8 ? 8 : size;
-        masm_section_append_data(section, &val, write_size);
-        if (size > 8)
-        {
-            masm_section_append_zero(section, size - 8);
-        }
-    }
-    else if (expr->kind == AST_EXPR_BINARY)
-    {
-        int64_t val = 0;
-        if (expr->binary_expr.op == TOKEN_MINUS)
-        {
-            if (expr->binary_expr.left->kind == AST_EXPR_LIT && expr->binary_expr.right->kind == AST_EXPR_LIT)
-            {
-                val = (int64_t)expr->binary_expr.left->lit_expr.int_val - (int64_t)expr->binary_expr.right->lit_expr.int_val;
-            }
-        }
-        size_t write_size = size > 8 ? 8 : size;
-        masm_section_append_data(section, &val, write_size);
-        if (size > 8)
-        {
-            masm_section_append_zero(section, size - 8);
-        }
-    }
     else
     {
-        masm_section_append_zero(section, size);
+        // try constant folding for unary, binary, ident, field expressions
+        int64_t val = 0;
+        if (eval_const_int(expr, &val))
+        {
+            size_t write_size = size > 8 ? 8 : size;
+            masm_section_append_data(section, &val, write_size);
+            if (size > 8)
+            {
+                masm_section_append_zero(section, size - 8);
+            }
+        }
+        else
+        {
+            masm_section_append_zero(section, size);
+        }
     }
 }
 

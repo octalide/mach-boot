@@ -164,6 +164,16 @@ void masm_merge(Masm *dest, Masm *src)
         {
             masm_section_append_data(dest_sec, src_sec->data, src_sec->data_size);
         }
+
+        // Merge data relocations (offset-adjusted by destination base)
+        uint64_t data_base = bases[base_count - 1].data_base;
+        for (size_t j = 0; j < src_sec->data_reloc_count; j++)
+        {
+            masm_section_append_reloc(dest_sec,
+                src_sec->data_relocs[j].offset + data_base,
+                src_sec->data_relocs[j].symbol_name,
+                src_sec->data_relocs[j].addend);
+        }
     }
 
     // Merge symbols
