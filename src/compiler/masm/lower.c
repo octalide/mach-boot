@@ -4007,6 +4007,58 @@ static void emit_global_data(Masm *masm, MasmSection *section, AstNode *expr, si
             masm_section_append_zero(section, size);
         }
     }
+    else if (expr->kind == AST_COMPTIME)
+    {
+        if (expr->comptime.value_kind == COMPTIME_INT)
+        {
+            uint64_t val        = (uint64_t)expr->comptime.int_value;
+            size_t   write_size = size > 8 ? 8 : size;
+            masm_section_append_data(section, &val, write_size);
+            if (size > 8)
+            {
+                masm_section_append_zero(section, size - 8);
+            }
+        }
+        else if (expr->comptime.value_kind == COMPTIME_STRING)
+        {
+            const char *str_val = expr->comptime.string_value;
+            if (!str_val)
+            {
+                masm_section_append_zero(section, size);
+                return;
+            }
+            size_t str_len = strlen(str_val) + 1;
+
+            char label[64];
+            snprintf(label, sizeof(label), ".Lstr_%d", counters->str_counter++);
+
+            MasmSection *rodata = masm_get_or_create_section(masm, ".rodata", MASM_SECTION_RODATA);
+
+            MasmSymbol *sym   = masm_symbol_create(label, MASM_SYMBOL_DATA, MASM_BIND_LOCAL);
+            sym->section_name = strdup(".rodata");
+            sym->offset       = rodata->data_size;
+            sym->size         = str_len;
+            masm_add_symbol(masm, sym);
+
+            masm_section_append_data(rodata, str_val, str_len - 1);
+            uint8_t zero = 0;
+            masm_section_append_data(rodata, &zero, 1);
+
+            size_t reloc_offset = section->data_size;
+            size_t ptr_size     = 8;
+            masm_section_append_zero(section, ptr_size);
+            masm_section_append_reloc(section, reloc_offset, label, 0);
+
+            if (size > ptr_size)
+            {
+                masm_section_append_zero(section, size - ptr_size);
+            }
+        }
+        else
+        {
+            masm_section_append_zero(section, size);
+        }
+    }
     else if (expr->kind == AST_EXPR_STRUCT)
     {
         Type *type = expr->type;
@@ -4158,6 +4210,11 @@ static void lower_global_var(Masm *masm, AstNode *stmt, ModuleCounters *counters
     {
         AstKind k = stmt->var_stmt.init->kind;
         if (k == AST_EXPR_LIT || k == AST_EXPR_STRUCT || k == AST_EXPR_ARRAY || k == AST_EXPR_UNARY || k == AST_EXPR_BINARY)
+        {
+            is_bss = false;
+        }
+        else if (k == AST_COMPTIME && (stmt->var_stmt.init->comptime.value_kind == COMPTIME_STRING
+                                    || stmt->var_stmt.init->comptime.value_kind == COMPTIME_INT))
         {
             is_bss = false;
         }
