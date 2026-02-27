@@ -2652,9 +2652,15 @@ static int sema_analyze_stmt(Sema *sema, AstNode *node)
         {
             return -1;
         }
-        if (sema_analyze_stmt(sema, node->cond_stmt.body) < 0)
         {
-            return -1;
+            SymbolTable *prev_table = sema->current_table;
+            sema->current_table     = symbol_table_create(prev_table);
+            if (sema_analyze_stmt(sema, node->cond_stmt.body) < 0)
+            {
+                sema->current_table = prev_table;
+                return -1;
+            }
+            sema->current_table = prev_table;
         }
         if (node->cond_stmt.stmt_or)
         {
@@ -2676,9 +2682,15 @@ static int sema_analyze_stmt(Sema *sema, AstNode *node)
         {
             return -1;
         }
-        if (sema_analyze_stmt(sema, node->cond_stmt.body) < 0)
         {
-            return -1;
+            SymbolTable *prev_table = sema->current_table;
+            sema->current_table     = symbol_table_create(prev_table);
+            if (sema_analyze_stmt(sema, node->cond_stmt.body) < 0)
+            {
+                sema->current_table = prev_table;
+                return -1;
+            }
+            sema->current_table = prev_table;
         }
         if (node->cond_stmt.stmt_or)
         {
