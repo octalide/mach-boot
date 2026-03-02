@@ -1302,24 +1302,23 @@ static MasmOperand lower_call_with_sret(Masm *masm, MasmSection *text, AstNode *
     MasmOperand target;
     if (func->kind == AST_EXPR_IDENT)
     {
-        LocalVar *var = find_local_var(ctx, func->ident_expr.name);
-        if (var)
+        if (func->symbol && func->symbol->kind == SYMBOL_FUNCTION)
         {
-            // Local function pointer
-            target = lower_expr(masm, text, func, ctx);
-            target = ensure_in_reg(text, target, func->type, ctx);
+            const char *link = symbol_linkage_name(func->symbol);
+            target = link ? masm_operand_label(link) : masm_operand_label(func->ident_expr.name);
         }
         else
         {
-            // Symbol
-            target = masm_operand_label(func->ident_expr.name);
-            if (func->symbol)
+            LocalVar *var = find_local_var(ctx, func->ident_expr.name);
+            if (var)
             {
-                const char *link = symbol_linkage_name(func->symbol);
-                if (link)
-                {
-                    target = masm_operand_label(link);
-                }
+                // Local function pointer
+                target = lower_expr(masm, text, func, ctx);
+                target = ensure_in_reg(text, target, func->type, ctx);
+            }
+            else
+            {
+                target = masm_operand_label(func->ident_expr.name);
             }
         }
     }
@@ -2625,10 +2624,8 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
 
         int32_t offset = ctx->stack_offset;
 
-        // add to symbol table with the logical size (so later loads use correct width)
-        add_local_var(ctx, stmt->var_stmt.name, offset, (int)var_size, stmt->type);
-
-        // if there's an initializer, evaluate and store it
+        // if there's an initializer, evaluate and store it before registering the
+        // variable name, so the name is not visible during its own initialization
         if (stmt->var_stmt.init)
         {
             MasmOperand value = lower_expr(masm, text, stmt->var_stmt.init, ctx);
@@ -2718,6 +2715,8 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
                 }
             }
         }
+
+        add_local_var(ctx, stmt->var_stmt.name, offset, (int)var_size, stmt->type);
     }
     else if (stmt->kind == AST_STMT_BRK)
     {
