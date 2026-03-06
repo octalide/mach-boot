@@ -1333,72 +1333,9 @@ AstNode *parser_parse_stmt_ext(Parser *parser, bool is_public)
         return NULL;
     }
 
-    // initialize fields
-    node->ext_stmt.name       = NULL;
-    node->ext_stmt.convention = NULL;
-    node->ext_stmt.symbol     = NULL;
-    node->ext_stmt.type       = NULL;
-    node->ext_stmt.is_public  = is_public;
-
-    // check for optional calling convention/symbol specification
-    if (parser_match(parser, TOKEN_LIT_STRING))
-    {
-        char *raw = lexer_raw_value(parser->lexer, parser->previous);
-        if (!raw)
-        {
-            parser_report_alloc_failure(parser, "out of memory reading extern metadata");
-            parser_free_node(node);
-            return NULL;
-        }
-
-        size_t raw_len   = strlen(raw);
-        size_t copy_len  = raw_len >= 2 ? raw_len - 2 : 0; // remove quotes safely
-        char  *conv_spec = malloc(copy_len + 1);
-        if (!conv_spec)
-        {
-            free(raw);
-            parser_report_alloc_failure(parser, "out of memory parsing extern metadata");
-            parser_free_node(node);
-            return NULL;
-        }
-
-        memcpy(conv_spec, raw + 1, copy_len);
-        conv_spec[copy_len] = '\0';
-        free(raw);
-
-        // parse "convention:symbol" or just "convention"
-        char *colon = strchr(conv_spec, ':');
-        if (colon)
-        {
-            *colon                    = '\0';
-            node->ext_stmt.convention = parser_strdup_checked(parser, conv_spec, "out of memory duplicating convention");
-            if (!node->ext_stmt.convention)
-            {
-                free(conv_spec);
-                parser_free_node(node);
-                return NULL;
-            }
-            node->ext_stmt.symbol = parser_strdup_checked(parser, colon + 1, "out of memory duplicating external symbol");
-            if (!node->ext_stmt.symbol)
-            {
-                free(conv_spec);
-                parser_free_node(node);
-                return NULL;
-            }
-        }
-        else
-        {
-            node->ext_stmt.convention = parser_strdup_checked(parser, conv_spec, "out of memory duplicating convention");
-            if (!node->ext_stmt.convention)
-            {
-                free(conv_spec);
-                parser_free_node(node);
-                return NULL;
-            }
-        }
-
-        free(conv_spec);
-    }
+    node->ext_stmt.name      = NULL;
+    node->ext_stmt.type      = NULL;
+    node->ext_stmt.is_public = is_public;
 
     node->ext_stmt.name = parser_parse_identifier(parser);
     if (!node->ext_stmt.name)
@@ -1406,28 +1343,6 @@ AstNode *parser_parse_stmt_ext(Parser *parser, bool is_public)
         parser_error_at_current(parser, "expected identifier after 'ext'");
         parser_free_node(node);
         return NULL;
-    }
-
-    // if no symbol specified, use the function name
-    if (!node->ext_stmt.symbol)
-    {
-        node->ext_stmt.symbol = parser_strdup_checked(parser, node->ext_stmt.name, "out of memory duplicating external symbol");
-        if (!node->ext_stmt.symbol)
-        {
-            parser_free_node(node);
-            return NULL;
-        }
-    }
-
-    // if no convention specified, default to "C"
-    if (!node->ext_stmt.convention)
-    {
-        node->ext_stmt.convention = parser_strdup_checked(parser, "C", "out of memory duplicating convention");
-        if (!node->ext_stmt.convention)
-        {
-            parser_free_node(node);
-            return NULL;
-        }
     }
 
     if (!parser_consume(parser, TOKEN_COLON, "expected ':' after external name"))

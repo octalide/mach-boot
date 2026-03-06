@@ -49,8 +49,6 @@ void ast_node_dnit(AstNode *node)
 
     case AST_STMT_EXT:
         free(node->ext_stmt.name);
-        free(node->ext_stmt.convention);
-        free(node->ext_stmt.symbol);
         if (node->ext_stmt.type)
         {
             ast_node_dnit(node->ext_stmt.type);
@@ -625,11 +623,9 @@ static AstNode *ast_clone_checked(const AstNode *node)
         break;
 
     case AST_STMT_EXT:
-        clone->ext_stmt.name            = ast_strdup(node->ext_stmt.name);
-        clone->ext_stmt.convention      = ast_strdup(node->ext_stmt.convention);
-        clone->ext_stmt.symbol          = ast_strdup(node->ext_stmt.symbol);
-        clone->ext_stmt.type            = ast_clone_checked(node->ext_stmt.type);
-        clone->ext_stmt.is_public       = node->ext_stmt.is_public;
+        clone->ext_stmt.name      = ast_strdup(node->ext_stmt.name);
+        clone->ext_stmt.type      = ast_clone_checked(node->ext_stmt.type);
+        clone->ext_stmt.is_public = node->ext_stmt.is_public;
         break;
 
     case AST_STMT_FWD:

@@ -1318,7 +1318,20 @@ static MasmOperand lower_call_with_sret(Masm *masm, MasmSection *text, AstNode *
             }
             else
             {
-                target = masm_operand_label(func->ident_expr.name);
+                const char *call_name = func->ident_expr.name;
+                if (ctx->symbols)
+                {
+                    Symbol *resolved = symbol_table_lookup(ctx->symbols, call_name);
+                    if (resolved)
+                    {
+                        const char *link = symbol_linkage_name(resolved);
+                        if (link)
+                        {
+                            call_name = link;
+                        }
+                    }
+                }
+                target = masm_operand_label(call_name);
             }
         }
     }
