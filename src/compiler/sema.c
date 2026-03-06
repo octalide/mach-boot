@@ -1173,6 +1173,85 @@ static int sema_collect_var_symbol(Sema *sema, AstNode *node)
     return 0;
 }
 
+
+static int sema_collect_fwd_symbol(Sema *sema, AstNode *node)
+{
+    if (node->kind != AST_STMT_FWD)
+    {
+        return -1;
+    }
+
+    // look up the target symbol in the aliased module
+    const char *alias_name  = node->fwd_stmt.module_alias;
+    const char *symbol_name = node->fwd_stmt.symbol_name;
+
+    if (!sema->current_module)
+    {
+        sema_error(sema, node->token, "fwd used outside of module context");
+        return -1;
+    }
+
+    ModuleAlias *al = NULL;
+    for (al = sema->current_module->aliases; al; al = al->next)
+    {
+        if (al->alias && strcmp(al->alias, alias_name) == 0)
+        {
+            break;
+        }
+    }
+
+    if (!al || !al->module || !al->module->table)
+    {
+        sema_error(sema, node->token, "unknown module alias in fwd statement");
+        return -1;
+    }
+
+    Symbol *target = symbol_table_lookup_local(al->module->table, symbol_name);
+    if (!target)
+    {
+        sema_error(sema, node->token, "symbol not found in target module");
+        return -1;
+    }
+
+    if (!target->is_public)
+    {
+        sema_error(sema, node->token, "cannot forward private symbol");
+        return -1;
+    }
+
+    // check for duplicates
+    Symbol *existing = symbol_table_lookup_local(sema->current_table, node->fwd_stmt.name);
+    if (existing)
+    {
+        if (existing->decl == node)
+        {
+            node->symbol = existing;
+            return 0;
+        }
+        sema_error(sema, node->token, "duplicate symbol in fwd declaration");
+        return -1;
+    }
+
+    // create a symbol with the same kind as the target
+    Symbol *sym = symbol_create(node->fwd_stmt.name, target->kind, sema->module_path);
+    if (!sym)
+    {
+        return -1;
+    }
+
+    sym->is_public = node->fwd_stmt.is_public;
+    sym->decl      = node;
+
+    if (symbol_table_insert(sema->current_table, sym) < 0)
+    {
+        sema_error(sema, node->token, "duplicate symbol in fwd declaration");
+        symbol_destroy(sym);
+        return -1;
+    }
+
+    node->symbol = sym;
+    return 0;
+}
 static int sema_collect_ext_symbol(Sema *sema, AstNode *node)
 {
     if (node->kind != AST_STMT_EXT)
@@ -1237,6 +1316,9 @@ static int sema_collect_symbols(Sema *sema, AstNode *node)
         return sema_collect_def_symbol(sema, node);
 
     case AST_STMT_EXT:
+
+    case AST_STMT_FWD:
+        return sema_collect_fwd_symbol(sema, node);
         return sema_collect_ext_symbol(sema, node);
 
     case AST_STMT_VAL:
@@ -1258,6 +1340,85 @@ static int sema_collect_symbols(Sema *sema, AstNode *node)
     }
 }
 
+
+static int sema_analyze_fwd(Sema *sema, AstNode *node)
+{
+    if (node->kind != AST_STMT_FWD)
+    {
+        return -1;
+    }
+
+    Symbol *sym = node->symbol;
+    if (!sym)
+    {
+        sema_error(sema, node->token, "fwd symbol not collected");
+        return -1;
+    }
+
+    // look up the target symbol again to get its resolved type/properties
+    const char *alias_name  = node->fwd_stmt.module_alias;
+    const char *symbol_name = node->fwd_stmt.symbol_name;
+
+    ModuleAlias *al = NULL;
+    for (al = sema->current_module->aliases; al; al = al->next)
+    {
+        if (al->alias && strcmp(al->alias, alias_name) == 0)
+        {
+            break;
+        }
+    }
+
+    if (!al || !al->module || !al->module->table)
+    {
+        sema_error(sema, node->token, "unknown module alias in fwd statement");
+        return -1;
+    }
+
+    Symbol *target = symbol_table_lookup_local(al->module->table, symbol_name);
+    if (!target)
+    {
+        sema_error(sema, node->token, "symbol not found in target module");
+        return -1;
+    }
+
+    // ensure the target is analyzed
+    sema_maybe_analyze_symbol_decl_in_module(sema, al->module, target);
+
+    if (!target->type)
+    {
+        sema_error(sema, node->token, "forwarded symbol has no resolved type");
+        return -1;
+    }
+
+    // copy type and linkage from target
+    sym->type = target->type;
+    sym->kind = target->kind;
+    node->type = target->type;
+
+    // inherit the target's mangled/export name so codegen resolves to the same symbol
+    if (target->export_name)
+    {
+        free(sym->export_name);
+        sym->export_name = strdup(target->export_name);
+    }
+    if (target->mangled_name)
+    {
+        free(sym->mangled_name);
+        sym->mangled_name = strdup(target->mangled_name);
+    }
+    else
+    {
+        // force mangle on target, then copy
+        symbol_mangle(target);
+        if (target->mangled_name)
+        {
+            free(sym->mangled_name);
+            sym->mangled_name = strdup(target->mangled_name);
+        }
+    }
+
+    return 0;
+}
 static int sema_analyze_ext(Sema *sema, AstNode *node)
 {
     if (node->kind != AST_STMT_EXT)
@@ -2549,6 +2710,9 @@ static int sema_analyze_stmt(Sema *sema, AstNode *node)
         return sema_analyze_def(sema, node);
 
     case AST_STMT_EXT:
+
+    case AST_STMT_FWD:
+        return sema_analyze_fwd(sema, node);
         return sema_analyze_ext(sema, node);
 
     case AST_STMT_USE:
