@@ -161,6 +161,44 @@ bool git_submodule_checkout(const char *path, const char *version)
     return result == 0;
 }
 
+// checkout a branch and reset it to match the remote tracking branch
+bool git_submodule_checkout_branch(const char *path, const char *branch)
+{
+    if (!path || !branch)
+    {
+        return false;
+    }
+
+    char *cwd = get_current_dir();
+    if (!cwd)
+    {
+        return false;
+    }
+
+    if (!chdir_path(path))
+    {
+        free(cwd);
+        return false;
+    }
+
+    size_t cmd_len = strlen("git checkout -B \"\" \"origin/\"") + strlen(branch) * 2 + 1;
+    char  *cmd     = malloc(cmd_len);
+    if (!cmd)
+    {
+        chdir_path(cwd);
+        free(cwd);
+        return false;
+    }
+
+    snprintf(cmd, cmd_len, "git checkout -B \"%s\" \"origin/%s\"", branch, branch);
+    int result = git_exec(cmd);
+    free(cmd);
+
+    chdir_path(cwd);
+    free(cwd);
+    return result == 0;
+}
+
 // remove a git submodule completely
 bool git_submodule_remove(const char *path)
 {
@@ -228,7 +266,7 @@ bool git_checkout_version(const char *path, const char *version)
     // check for branch/ prefix
     if (strncmp(version, "branch/", 7) == 0)
     {
-        ref_to_checkout = strdup(version + 7);
+        return git_submodule_checkout_branch(path, version + 7);
     }
     // check for commit/ prefix
     else if (strncmp(version, "commit/", 7) == 0)

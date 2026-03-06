@@ -102,6 +102,7 @@ static bool parser_token_is_attr_category(TokenKind kind)
     case TOKEN_KW_REC:
     case TOKEN_KW_UNI:
     case TOKEN_KW_EXT:
+    case TOKEN_KW_FWD:
     case TOKEN_KW_DEF:
         return true;
     default:
@@ -545,6 +546,7 @@ void parser_synchronize(Parser *parser)
         {
         case TOKEN_KW_USE:
         case TOKEN_KW_EXT:
+        case TOKEN_KW_FWD:
         case TOKEN_KW_DEF:
         case TOKEN_KW_REC:
         case TOKEN_KW_UNI:
@@ -1046,6 +1048,9 @@ AstNode *parser_parse_stmt_top(Parser *parser)
     case TOKEN_KW_EXT:
         result = parser_parse_stmt_ext(parser, is_public);
         break;
+    case TOKEN_KW_FWD:
+        result = parser_parse_stmt_fwd(parser, is_public);
+        break;
     case TOKEN_KW_DEF:
         result = parser_parse_stmt_def(parser, is_public);
         break;
@@ -1217,6 +1222,104 @@ AstNode *parser_parse_stmt_use(Parser *parser)
     return node;
 }
 
+// fwd [name ':'] module_alias '.' symbol_name ';'
+AstNode *parser_parse_stmt_fwd(Parser *parser, bool is_public)
+{
+    if (!parser_consume(parser, TOKEN_KW_FWD, "expected 'fwd' keyword"))
+    {
+        return NULL;
+    }
+
+    AstNode *node = parser_alloc_node(parser, AST_STMT_FWD, parser->previous);
+    if (!node)
+    {
+        return NULL;
+    }
+
+    node->fwd_stmt.name         = NULL;
+    node->fwd_stmt.module_alias = NULL;
+    node->fwd_stmt.symbol_name  = NULL;
+    node->fwd_stmt.is_public    = is_public;
+
+    // parse first identifier
+    char *first = parser_parse_identifier(parser);
+    if (!first)
+    {
+        parser_error_at_current(parser, "expected identifier after 'fwd'");
+        parser_free_node(node);
+        return NULL;
+    }
+
+    if (parser_match(parser, TOKEN_COLON))
+    {
+        // rename form: fwd local_name: module.symbol;
+        node->fwd_stmt.name = first;
+
+        char *alias = parser_parse_identifier(parser);
+        if (!alias)
+        {
+            parser_error_at_current(parser, "expected module alias after ':'");
+            parser_free_node(node);
+            return NULL;
+        }
+
+        if (!parser_consume(parser, TOKEN_DOT, "expected '.' after module alias"))
+        {
+            free(alias);
+            parser_free_node(node);
+            return NULL;
+        }
+
+        char *sym_name = parser_parse_identifier(parser);
+        if (!sym_name)
+        {
+            parser_error_at_current(parser, "expected symbol name after '.'");
+            free(alias);
+            parser_free_node(node);
+            return NULL;
+        }
+
+        node->fwd_stmt.module_alias = alias;
+        node->fwd_stmt.symbol_name  = sym_name;
+    }
+    else if (parser_match(parser, TOKEN_DOT))
+    {
+        // same-name form: fwd module.symbol;
+        node->fwd_stmt.module_alias = first;
+
+        char *sym_name = parser_parse_identifier(parser);
+        if (!sym_name)
+        {
+            parser_error_at_current(parser, "expected symbol name after '.'");
+            parser_free_node(node);
+            return NULL;
+        }
+
+        node->fwd_stmt.symbol_name = sym_name;
+        node->fwd_stmt.name = parser_strdup_checked(parser, sym_name, "out of memory duplicating fwd name");
+        if (!node->fwd_stmt.name)
+        {
+            parser_free_node(node);
+            return NULL;
+        }
+    }
+    else
+    {
+        parser_error_at_current(parser, "expected '.' or ':' after identifier in fwd statement");
+        free(first);
+        parser_free_node(node);
+        return NULL;
+    }
+
+    if (!parser_consume(parser, TOKEN_SEMICOLON, "expected ';' after fwd statement"))
+    {
+        parser_free_node(node);
+        return NULL;
+    }
+
+    return node;
+}
+
 AstNode *parser_parse_stmt_ext(Parser *parser, bool is_public)
 {
     if (!parser_consume(parser, TOKEN_KW_EXT, "expected 'ext' keyword"))
@@ -1230,72 +1333,9 @@ AstNode *parser_parse_stmt_ext(Parser *parser, bool is_public)
         return NULL;
     }
 
-    // initialize fields
-    node->ext_stmt.name       = NULL;
-    node->ext_stmt.convention = NULL;
-    node->ext_stmt.symbol     = NULL;
-    node->ext_stmt.type       = NULL;
-    node->ext_stmt.is_public  = is_public;
-
-    // check for optional calling convention/symbol specification
-    if (parser_match(parser, TOKEN_LIT_STRING))
-    {
-        char *raw = lexer_raw_value(parser->lexer, parser->previous);
-        if (!raw)
-        {
-            parser_report_alloc_failure(parser, "out of memory reading extern metadata");
-            parser_free_node(node);
-            return NULL;
-        }
-
-        size_t raw_len   = strlen(raw);
-        size_t copy_len  = raw_len >= 2 ? raw_len - 2 : 0; // remove quotes safely
-        char  *conv_spec = malloc(copy_len + 1);
-        if (!conv_spec)
-        {
-            free(raw);
-            parser_report_alloc_failure(parser, "out of memory parsing extern metadata");
-            parser_free_node(node);
-            return NULL;
-        }
-
-        memcpy(conv_spec, raw + 1, copy_len);
-        conv_spec[copy_len] = '\0';
-        free(raw);
-
-        // parse "convention:symbol" or just "convention"
-        char *colon = strchr(conv_spec, ':');
-        if (colon)
-        {
-            *colon                    = '\0';
-            node->ext_stmt.convention = parser_strdup_checked(parser, conv_spec, "out of memory duplicating convention");
-            if (!node->ext_stmt.convention)
-            {
-                free(conv_spec);
-                parser_free_node(node);
-                return NULL;
-            }
-            node->ext_stmt.symbol = parser_strdup_checked(parser, colon + 1, "out of memory duplicating external symbol");
-            if (!node->ext_stmt.symbol)
-            {
-                free(conv_spec);
-                parser_free_node(node);
-                return NULL;
-            }
-        }
-        else
-        {
-            node->ext_stmt.convention = parser_strdup_checked(parser, conv_spec, "out of memory duplicating convention");
-            if (!node->ext_stmt.convention)
-            {
-                free(conv_spec);
-                parser_free_node(node);
-                return NULL;
-            }
-        }
-
-        free(conv_spec);
-    }
+    node->ext_stmt.name      = NULL;
+    node->ext_stmt.type      = NULL;
+    node->ext_stmt.is_public = is_public;
 
     node->ext_stmt.name = parser_parse_identifier(parser);
     if (!node->ext_stmt.name)
@@ -1303,28 +1343,6 @@ AstNode *parser_parse_stmt_ext(Parser *parser, bool is_public)
         parser_error_at_current(parser, "expected identifier after 'ext'");
         parser_free_node(node);
         return NULL;
-    }
-
-    // if no symbol specified, use the function name
-    if (!node->ext_stmt.symbol)
-    {
-        node->ext_stmt.symbol = parser_strdup_checked(parser, node->ext_stmt.name, "out of memory duplicating external symbol");
-        if (!node->ext_stmt.symbol)
-        {
-            parser_free_node(node);
-            return NULL;
-        }
-    }
-
-    // if no convention specified, default to "C"
-    if (!node->ext_stmt.convention)
-    {
-        node->ext_stmt.convention = parser_strdup_checked(parser, "C", "out of memory duplicating convention");
-        if (!node->ext_stmt.convention)
-        {
-            parser_free_node(node);
-            return NULL;
-        }
     }
 
     if (!parser_consume(parser, TOKEN_COLON, "expected ':' after external name"))

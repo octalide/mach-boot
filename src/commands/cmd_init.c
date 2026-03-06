@@ -37,7 +37,7 @@ static const char *template_mach_toml = "[project]\n"
                                         "[deps.mach-std]\n"
                                         "type    = \"remote\"\n"
                                         "path    = \"https://github.com/octalide/mach-std\"\n"
-                                        "version = \"branch/feat/masm\"\n";
+                                        "version = \"branch/dev\"\n";
 
 void cmd_init_help(FILE *stream)
 {
@@ -179,8 +179,8 @@ int cmd_init_handle(int argc, char **argv)
     }
     else
     {
-        // checkout branch/feat/masm
-        if (!git_checkout_version(mach_std_path, "branch/feat/masm"))
+        // checkout branch/dev
+        if (!git_checkout_version(mach_std_path, "branch/dev"))
         {
             fprintf(stderr, "warning: failed to checkout mach-std version\n");
         }

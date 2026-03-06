@@ -21,6 +21,9 @@ bool git_submodule_fetch(const char *path);
 // checkout a specific version (branch, tag, or commit) in a submodule
 bool git_submodule_checkout(const char *path, const char *version);
 
+// checkout a branch and reset it to match the remote tracking branch
+bool git_submodule_checkout_branch(const char *path, const char *branch);
+
 // remove a git submodule completely
 bool git_submodule_remove(const char *path);
 
