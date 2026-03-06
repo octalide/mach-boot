@@ -1316,10 +1316,10 @@ static int sema_collect_symbols(Sema *sema, AstNode *node)
         return sema_collect_def_symbol(sema, node);
 
     case AST_STMT_EXT:
+        return sema_collect_ext_symbol(sema, node);
 
     case AST_STMT_FWD:
         return sema_collect_fwd_symbol(sema, node);
-        return sema_collect_ext_symbol(sema, node);
 
     case AST_STMT_VAL:
     case AST_STMT_VAR:
@@ -1460,16 +1460,12 @@ static int sema_analyze_ext(Sema *sema, AstNode *node)
     sym->type  = t;
     node->type = t;
 
-    // set linkage/export name to the underlying symbol name
-    if (node->ext_stmt.symbol)
+    // ext symbols are never mangled — use the name as-is for linkage.
+    // only set if not already overridden by $name.symbol annotation.
+    if (!sym->export_name)
     {
-        if (sym->export_name)
-        {
-            free(sym->export_name);
-        }
-        sym->export_name = strdup(node->ext_stmt.symbol);
+        sym->export_name = strdup(node->ext_stmt.name);
     }
-
     return 0;
 }
 
@@ -2710,10 +2706,10 @@ static int sema_analyze_stmt(Sema *sema, AstNode *node)
         return sema_analyze_def(sema, node);
 
     case AST_STMT_EXT:
+        return sema_analyze_ext(sema, node);
 
     case AST_STMT_FWD:
         return sema_analyze_fwd(sema, node);
-        return sema_analyze_ext(sema, node);
 
     case AST_STMT_USE:
         return sema_analyze_use(sema, node);

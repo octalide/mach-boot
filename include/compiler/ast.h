@@ -118,9 +118,7 @@ struct AstNode
         // external statement
         struct
         {
-            char    *name;       // function name in Mach code
-            char    *convention; // calling convention (e.g., "C")
-            char    *symbol;     // target symbol name (default: same as name)
+            char    *name; // function name (also used as linker symbol)
             AstNode *type;
             bool     is_public;
         } ext_stmt;
