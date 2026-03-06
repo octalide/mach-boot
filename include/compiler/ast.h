@@ -17,6 +17,7 @@ typedef enum AstKind
     // statements
     AST_STMT_USE,
     AST_STMT_EXT,
+    AST_STMT_FWD,
     AST_STMT_DEF,
     AST_STMT_VAL,
     AST_STMT_VAR,
@@ -123,6 +124,15 @@ struct AstNode
             AstNode *type;
             bool     is_public;
         } ext_stmt;
+
+        // forward (re-export) statement
+        struct
+        {
+            char *name;         // local name for the symbol
+            char *module_alias; // alias of the source module (e.g. "impl")
+            char *symbol_name;  // name in the source module (e.g. "read")
+            bool  is_public;
+        } fwd_stmt;
 
         // type definition
         struct

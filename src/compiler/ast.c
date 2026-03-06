@@ -58,6 +58,12 @@ void ast_node_dnit(AstNode *node)
         }
         break;
 
+    case AST_STMT_FWD:
+        free(node->fwd_stmt.name);
+        free(node->fwd_stmt.module_alias);
+        free(node->fwd_stmt.symbol_name);
+        break;
+
     case AST_STMT_DEF:
         free(node->def_stmt.name);
         if (node->def_stmt.type)
@@ -626,6 +632,13 @@ static AstNode *ast_clone_checked(const AstNode *node)
         clone->ext_stmt.is_public       = node->ext_stmt.is_public;
         break;
 
+    case AST_STMT_FWD:
+        clone->fwd_stmt.name         = ast_strdup(node->fwd_stmt.name);
+        clone->fwd_stmt.module_alias = ast_strdup(node->fwd_stmt.module_alias);
+        clone->fwd_stmt.symbol_name  = ast_strdup(node->fwd_stmt.symbol_name);
+        clone->fwd_stmt.is_public    = node->fwd_stmt.is_public;
+        break;
+
     case AST_STMT_DEF:
         clone->def_stmt.name      = ast_strdup(node->def_stmt.name);
         clone->def_stmt.type      = ast_clone_checked(node->def_stmt.type);
@@ -931,6 +944,10 @@ void ast_print(AstNode *node, int indent)
     case AST_STMT_EXT:
         printf("EXT %s:\n", node->ext_stmt.name);
         ast_print(node->ext_stmt.type, indent + 1);
+        break;
+
+    case AST_STMT_FWD:
+        printf("FWD %s: %s.%s\n", node->fwd_stmt.name, node->fwd_stmt.module_alias, node->fwd_stmt.symbol_name);
         break;
 
     case AST_STMT_DEF:
@@ -1361,6 +1378,8 @@ const char *ast_node_kind_to_string(AstKind kind)
         return "USE";
     case AST_STMT_EXT:
         return "EXT";
+    case AST_STMT_FWD:
+        return "FWD";
     case AST_STMT_DEF:
         return "DEF";
     case AST_STMT_VAL:
@@ -1497,6 +1516,9 @@ static void ast_print_to_file(AstNode *node, FILE *file, int indent)
     case AST_STMT_EXT:
         fprintf(file, "EXT %s:\n", node->ext_stmt.name);
         ast_print_to_file(node->ext_stmt.type, file, indent + 1);
+        break;
+    case AST_STMT_FWD:
+        fprintf(file, "FWD %s: %s.%s\n", node->fwd_stmt.name, node->fwd_stmt.module_alias, node->fwd_stmt.symbol_name);
         break;
     case AST_STMT_DEF:
         fprintf(file, "DEF %s:\n", node->def_stmt.name);
