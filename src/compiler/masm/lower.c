@@ -2777,7 +2777,20 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
             if (ctx->isa && ctx->isa->parse_inline_asm)
             {
                 size_t before = text->inst_count;
-                ctx->isa->parse_inline_asm(text, stmt->masm_stmt.isa_content, ctx->ptr_size);
+                MasmAsmLocal *asm_locals = NULL;
+                if (ctx->var_count > 0)
+                {
+                    asm_locals = malloc(sizeof(MasmAsmLocal) * ctx->var_count);
+                    for (int li = 0; li < ctx->var_count; li++)
+                    {
+                        asm_locals[li].name   = ctx->vars[li].name;
+                        asm_locals[li].offset = ctx->vars[li].offset;
+                        asm_locals[li].size   = ctx->vars[li].size;
+                    }
+                }
+                ctx->isa->parse_inline_asm(text, stmt->masm_stmt.isa_content, ctx->ptr_size,
+                                           asm_locals, ctx->var_count, ctx->fp_reg);
+                free(asm_locals);
                 if (ctx->symbols)
                 {
                     for (size_t i = before; i < text->inst_count; i++)
