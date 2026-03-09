@@ -235,6 +235,18 @@ const char *masm_ir_name(MasmIrOpcode op)
     case MASM_IR_SYSCALL:
         return "syscall";
 
+    // atomics
+    case MASM_IR_ATOMIC_LOAD:
+        return "atomic_load";
+    case MASM_IR_ATOMIC_STORE:
+        return "atomic_store";
+    case MASM_IR_CMPXCHG:
+        return "cmpxchg";
+    case MASM_IR_FENCE:
+        return "fence";
+    case MASM_IR_ATOMIC_RMW:
+        return "atomic_rmw";
+
     // pseudo-ops
     case MASM_IR_LABEL:
         return "label";
