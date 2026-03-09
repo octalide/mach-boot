@@ -2756,7 +2756,34 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
             // ISA-specific block: delegate to ISA handler
             if (ctx->isa && ctx->isa->parse_inline_asm)
             {
+                size_t before = text->inst_count;
                 ctx->isa->parse_inline_asm(text, stmt->masm_stmt.isa_content, ctx->ptr_size);
+                if (ctx->symbols)
+                {
+                    for (size_t i = before; i < text->inst_count; i++)
+                    {
+                        MasmInstruction *inst = &text->instructions[i];
+                        for (int j = 0; j < inst->operand_count; j++)
+                        {
+                            const char *name = NULL;
+                            if (inst->operands[j].kind == MASM_OPERAND_SYMBOL)
+                                name = inst->operands[j].symbol;
+                            else if (inst->operands[j].kind == MASM_OPERAND_LABEL)
+                                name = inst->operands[j].label;
+                            if (!name) continue;
+                            Symbol *sym = symbol_table_lookup(ctx->symbols, name);
+                            if (sym)
+                            {
+                                const char *link = symbol_linkage_name(sym);
+                                if (link)
+                                {
+                                    inst->operands[j].kind = MASM_OPERAND_LABEL;
+                                    inst->operands[j].label = strdup(link);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         else if (stmt->masm_stmt.content)
