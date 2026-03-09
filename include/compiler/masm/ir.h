@@ -90,6 +90,13 @@ typedef enum MasmIrOpcode
     // system
     MASM_IR_SYSCALL,
 
+    // atomics
+    MASM_IR_ATOMIC_LOAD,
+    MASM_IR_ATOMIC_STORE,
+    MASM_IR_CMPXCHG,
+    MASM_IR_FENCE,
+    MASM_IR_ATOMIC_RMW,
+
     // pseudo-ops
     MASM_IR_LABEL,
     MASM_IR_DATA,
@@ -107,6 +114,16 @@ typedef enum MasmIrFcmpCond
     MASM_IR_FCMP_GT,
     MASM_IR_FCMP_GE
 } MasmIrFcmpCond;
+
+typedef enum MasmIrRmwOp
+{
+    MASM_IR_RMW_XCHG,
+    MASM_IR_RMW_ADD,
+    MASM_IR_RMW_SUB,
+    MASM_IR_RMW_AND,
+    MASM_IR_RMW_OR,
+    MASM_IR_RMW_XOR
+} MasmIrRmwOp;
 
 // opcode namespace discriminator
 typedef enum MasmOpcodeKind
