@@ -1608,107 +1608,6 @@ static void emit_syscall(MasmSection *sec, CodeGenContext *ctx, MasmInstruction 
     }
 }
 
-static void emit_atomic_load(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst)
-{
-    // ATOMIC_LOAD dst, ptr
-    // x86_64: aligned MOV is atomic; just load through the pointer
-    MasmOperand dst = inst->operands[0];
-    MasmOperand ptr = inst->operands[1];
-
-    load_operand(sec, ctx, ptr, MASM_X86_RAX, 0);
-    MasmOperand mem = masm_operand_memory_simple(MASM_X86_RAX, 0, 8);
-    emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_MOV_RM, masm_x86_reg(MASM_X86_RAX, 8), mem));
-
-    if (dst.kind == MASM_OPERAND_REGISTER)
-        store_vreg(sec, ctx, dst.reg.id, MASM_X86_RAX, dst.reg.size);
-}
-
-static void emit_atomic_store(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst)
-{
-    // ATOMIC_STORE ptr, val
-    // x86_64: MOV [ptr], val + MFENCE for sequential consistency
-    MasmOperand ptr = inst->operands[0];
-    MasmOperand val = inst->operands[1];
-
-    load_operand(sec, ctx, ptr, MASM_X86_RDI, 0);
-    load_operand(sec, ctx, val, MASM_X86_RAX, 0);
-    MasmOperand mem = masm_operand_memory_simple(MASM_X86_RDI, 0, 8);
-    emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_MOV_MR, mem, masm_x86_reg(MASM_X86_RAX, 8)));
-    emit_inst(sec, masm_x86_inst_0(MASM_OP_X86_MFENCE));
-}
-
-static void emit_cmpxchg(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst)
-{
-    // CMPXCHG dst, ptr, expected, desired
-    // x86_64: load *expected into RAX, LOCK CMPXCHG [ptr], desired
-    // on success: ZF=1, [ptr]=desired, RAX unchanged
-    // on failure: ZF=0, RAX=actual value, write actual back to *expected
-    // dst receives 1 (success) or 0 (failure)
-    MasmOperand dst      = inst->operands[0];
-    MasmOperand ptr      = inst->operands[1];
-    MasmOperand expected = inst->operands[2];
-    MasmOperand desired  = inst->operands[3];
-
-    load_operand(sec, ctx, ptr, MASM_X86_RDI, 0);
-    load_operand(sec, ctx, expected, MASM_X86_RSI, 0);
-    load_operand(sec, ctx, desired, MASM_X86_RDX, 0);
-
-    // RAX = *expected
-    MasmOperand exp_mem = masm_operand_memory_simple(MASM_X86_RSI, 0, 8);
-    emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_MOV_RM, masm_x86_reg(MASM_X86_RAX, 8), exp_mem));
-
-    // LOCK CMPXCHG [RDI], RDX
-    MasmOperand ptr_mem = masm_operand_memory_simple(MASM_X86_RDI, 0, 8);
-    emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_LOCK_CMPXCHG_MR, ptr_mem, masm_x86_reg(MASM_X86_RDX, 8)));
-
-    // write RAX back to *expected (updated on failure, unchanged on success)
-    emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_MOV_MR, exp_mem, masm_x86_reg(MASM_X86_RAX, 8)));
-
-    // SETE AL; MOVZX EAX, AL → dst = (success ? 1 : 0)
-    emit_inst(sec, masm_x86_inst_1(MASM_OP_X86_SETE, masm_x86_reg(MASM_X86_RAX, 1)));
-    emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_MOVZX_RR, masm_x86_reg(MASM_X86_RAX, 4), masm_x86_reg(MASM_X86_RAX, 1)));
-
-    if (dst.kind == MASM_OPERAND_REGISTER)
-        store_vreg(sec, ctx, dst.reg.id, MASM_X86_RAX, dst.reg.size);
-}
-
-static void emit_atomic_rmw(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst)
-{
-    // ATOMIC_RMW dst, ptr, val, rmw_op
-    // returns the OLD value in dst
-    MasmOperand dst    = inst->operands[0];
-    MasmOperand ptr    = inst->operands[1];
-    MasmOperand val    = inst->operands[2];
-    int64_t     rmw_op = inst->operands[3].imm;
-
-    load_operand(sec, ctx, ptr, MASM_X86_RDI, 0);
-    load_operand(sec, ctx, val, MASM_X86_RAX, 0);
-
-    MasmOperand mem = masm_operand_memory_simple(MASM_X86_RDI, 0, 8);
-
-    switch (rmw_op)
-    {
-    case MASM_IR_RMW_XCHG:
-        // XCHG [RDI], RAX (implicit lock, returns old in RAX)
-        emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_XCHG_RM, masm_x86_reg(MASM_X86_RAX, 8), mem));
-        break;
-    case MASM_IR_RMW_ADD:
-        // LOCK XADD [RDI], RAX (returns old in RAX)
-        emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_LOCK_XADD_MR, mem, masm_x86_reg(MASM_X86_RAX, 8)));
-        break;
-    case MASM_IR_RMW_SUB:
-        // NEG RAX; LOCK XADD [RDI], RAX (returns old in RAX)
-        emit_inst(sec, masm_x86_inst_1(MASM_OP_X86_NEG_R, masm_x86_reg(MASM_X86_RAX, 8)));
-        emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_LOCK_XADD_MR, mem, masm_x86_reg(MASM_X86_RAX, 8)));
-        break;
-    default:
-        break;
-    }
-
-    if (dst.kind == MASM_OPERAND_REGISTER)
-        store_vreg(sec, ctx, dst.reg.id, MASM_X86_RAX, dst.reg.size);
-}
-
 static void emit_fconv(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst)
 {
     MasmOperand dst  = inst->operands[0];
@@ -2061,22 +1960,6 @@ static void x86_64_codegen(Masm *masm)
                     break;
                 case MASM_IR_SYSCALL:
                     emit_syscall(out, &ctx, inst);
-                    break;
-
-                case MASM_IR_ATOMIC_LOAD:
-                    emit_atomic_load(out, &ctx, inst);
-                    break;
-                case MASM_IR_ATOMIC_STORE:
-                    emit_atomic_store(out, &ctx, inst);
-                    break;
-                case MASM_IR_CMPXCHG:
-                    emit_cmpxchg(out, &ctx, inst);
-                    break;
-                case MASM_IR_FENCE:
-                    emit_inst(out, masm_x86_inst_0(MASM_OP_X86_MFENCE));
-                    break;
-                case MASM_IR_ATOMIC_RMW:
-                    emit_atomic_rmw(out, &ctx, inst);
                     break;
 
                 default:
