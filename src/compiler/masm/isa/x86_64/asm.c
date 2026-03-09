@@ -123,6 +123,11 @@ static MasmOperand parse_operand(const char *str, uint8_t ptr_size)
                 }
                 return masm_operand_memory_simple(base.reg.id, (int32_t)disp, ptr_size);
             }
+
+            if (!sep && strlen(reg_str) > 0)
+            {
+                return masm_operand_symbol(strdup(reg_str));
+            }
         }
     }
 
@@ -132,6 +137,22 @@ static MasmOperand parse_operand(const char *str, uint8_t ptr_size)
     if (str != end && *end == '\0')
     {
         return masm_operand_imm(val);
+    }
+
+    // check for bare symbol name (alphanumeric + underscore)
+    {
+        bool valid_sym = (*str == '_' || (*str >= 'a' && *str <= 'z') || (*str >= 'A' && *str <= 'Z'));
+        for (const char *c = str + 1; valid_sym && *c; c++)
+        {
+            if (!(*c == '_' || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9')))
+            {
+                valid_sym = false;
+            }
+        }
+        if (valid_sym && *str)
+        {
+            return masm_operand_label(strdup(str));
+        }
     }
 
     // unrecognized
@@ -313,7 +334,25 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         {
             if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
-                if (dst.kind == MASM_OPERAND_MEMORY && src.kind == MASM_OPERAND_REGISTER)
+                if (dst.kind == MASM_OPERAND_REGISTER && src.kind == MASM_OPERAND_SYMBOL)
+                {
+                    MasmOperand r11 = masm_operand_register(MASM_X86_R11, ptr_size);
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_MOV_RI, r11, masm_operand_symbol(src.symbol)));
+                    MasmOperand mem = masm_operand_memory_simple(MASM_X86_R11, 0, dst.reg.size);
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_MOV_RM, dst, mem));
+                }
+                else if (dst.kind == MASM_OPERAND_SYMBOL && src.kind == MASM_OPERAND_REGISTER)
+                {
+                    MasmOperand r11 = masm_operand_register(MASM_X86_R11, ptr_size);
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_MOV_RI, r11, masm_operand_symbol(dst.symbol)));
+                    MasmOperand mem = masm_operand_memory_simple(MASM_X86_R11, 0, src.reg.size);
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_MOV_MR, mem, src));
+                }
+                else if (dst.kind == MASM_OPERAND_REGISTER && src.kind == MASM_OPERAND_LABEL)
+                {
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_MOV_RI, dst, masm_operand_symbol(src.label)));
+                }
+                else if (dst.kind == MASM_OPERAND_MEMORY && src.kind == MASM_OPERAND_REGISTER)
                 {
                     masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_MOV_MR, dst, src));
                 }
@@ -521,8 +560,189 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_NOT_R, dst));
             }
         }
-        // unknown instruction - silently ignore for now
-        // (could emit a warning in the future)
+        // lock cmpxchg [mem], reg
+        else if (strncmp(token, "lock cmpxchg ", 13) == 0)
+        {
+            if (parse_two_op(token + 13, &dst, &src, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_LOCK_CMPXCHG_MR, dst, src));
+            }
+        }
+        // lock xadd [mem], reg
+        else if (strncmp(token, "lock xadd ", 10) == 0)
+        {
+            if (parse_two_op(token + 10, &dst, &src, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_LOCK_XADD_MR, dst, src));
+            }
+        }
+        // xchg dst, src
+        else if (strncmp(token, "xchg ", 5) == 0)
+        {
+            if (parse_two_op(token + 5, &dst, &src, ptr_size))
+            {
+                if (dst.kind == MASM_OPERAND_REGISTER && src.kind == MASM_OPERAND_MEMORY)
+                {
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_XCHG_RM, dst, src));
+                }
+                else if (dst.kind == MASM_OPERAND_MEMORY && src.kind == MASM_OPERAND_REGISTER)
+                {
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_XCHG_RM, src, dst));
+                }
+                else
+                {
+                    masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_XCHG_RR, dst, src));
+                }
+            }
+        }
+        // setcc family
+        else if (strncmp(token, "setz ", 5) == 0 || strncmp(token, "sete ", 5) == 0)
+        {
+            if (parse_one_op(token + 5, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETE, dst));
+            }
+        }
+        else if (strncmp(token, "setnz ", 6) == 0 || strncmp(token, "setne ", 6) == 0)
+        {
+            if (parse_one_op(token + 6, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETNE, dst));
+            }
+        }
+        else if (strncmp(token, "setl ", 5) == 0)
+        {
+            if (parse_one_op(token + 5, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETL, dst));
+            }
+        }
+        else if (strncmp(token, "setg ", 5) == 0)
+        {
+            if (parse_one_op(token + 5, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETG, dst));
+            }
+        }
+        else if (strncmp(token, "setle ", 6) == 0)
+        {
+            if (parse_one_op(token + 6, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETLE, dst));
+            }
+        }
+        else if (strncmp(token, "setge ", 6) == 0)
+        {
+            if (parse_one_op(token + 6, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETGE, dst));
+            }
+        }
+        else if (strncmp(token, "setb ", 5) == 0)
+        {
+            if (parse_one_op(token + 5, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETB, dst));
+            }
+        }
+        else if (strncmp(token, "seta ", 5) == 0)
+        {
+            if (parse_one_op(token + 5, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETA, dst));
+            }
+        }
+        else if (strncmp(token, "setbe ", 6) == 0)
+        {
+            if (parse_one_op(token + 6, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETBE, dst));
+            }
+        }
+        else if (strncmp(token, "setae ", 6) == 0)
+        {
+            if (parse_one_op(token + 6, &dst, ptr_size))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETAE, dst));
+            }
+        }
+        // mfence
+        else if (strcmp(token, "mfence") == 0)
+        {
+            masm_section_append_inst(section, masm_x86_inst_0(MASM_OP_X86_MFENCE));
+        }
+        // lfence
+        else if (strcmp(token, "lfence") == 0)
+        {
+            masm_section_append_inst(section, masm_x86_inst_0(MASM_OP_X86_LFENCE));
+        }
+        // sfence
+        else if (strcmp(token, "sfence") == 0)
+        {
+            masm_section_append_inst(section, masm_x86_inst_0(MASM_OP_X86_SFENCE));
+        }
+        // pause
+        else if (strcmp(token, "pause") == 0)
+        {
+            masm_section_append_inst(section, masm_x86_inst_0(MASM_OP_X86_PAUSE));
+        }
+        // hlt
+        else if (strcmp(token, "hlt") == 0)
+        {
+            masm_section_append_inst(section, masm_x86_inst_0(MASM_OP_X86_HLT));
+        }
+        // jc/jb label
+        else if (strncmp(token, "jc ", 3) == 0 || strncmp(token, "jb ", 3) == 0)
+        {
+            char *label = trim_leading(token + 3);
+            trim_trailing(label);
+            masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_JB, masm_operand_label(label)));
+        }
+        // jnc/jae label
+        else if (strncmp(token, "jnc ", 4) == 0 || strncmp(token, "jae ", 4) == 0)
+        {
+            char *label = trim_leading(token + 4);
+            trim_trailing(label);
+            masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_JAE, masm_operand_label(label)));
+        }
+        // jbe/jna label
+        else if (strncmp(token, "jbe ", 4) == 0)
+        {
+            char *label = trim_leading(token + 4);
+            trim_trailing(label);
+            masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_JBE, masm_operand_label(label)));
+        }
+        // ja/jnbe label
+        else if (strncmp(token, "ja ", 3) == 0)
+        {
+            char *label = trim_leading(token + 3);
+            trim_trailing(label);
+            masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_JA, masm_operand_label(label)));
+        }
+        // .byte directive for raw byte emission
+        else if (strncmp(token, ".byte ", 6) == 0)
+        {
+            char *args = token + 6;
+            char *byte_save = NULL;
+            char *byte_tok = strtok_r(args, ",", &byte_save);
+            while (byte_tok)
+            {
+                byte_tok = trim_leading(byte_tok);
+                trim_trailing(byte_tok);
+                char *endp;
+                long bval = strtol(byte_tok, &endp, 0);
+                if (byte_tok != endp && *endp == '\0')
+                {
+                    masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_RAW_BYTE, masm_operand_imm(bval)));
+                }
+                byte_tok = strtok_r(NULL, ",", &byte_save);
+            }
+        }
+        // unknown instruction - emit warning
+        else
+        {
+            fprintf(stderr, "warning: unknown x86_64 asm instruction: %s\n", token);
+        }
 
         token = strtok_r(NULL, "\n;", &saveptr);
     }

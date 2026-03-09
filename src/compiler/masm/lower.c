@@ -1946,12 +1946,32 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
                 }
 
                 MasmSymbol *sym = masm_get_symbol(masm, inner_expr->ident_expr.name);
+                if (!sym && inner_expr->symbol)
+                {
+                    const char *link_name = symbol_linkage_name(inner_expr->symbol);
+                    if (link_name)
+                    {
+                        sym = masm_get_symbol(masm, link_name);
+                    }
+                }
                 if (sym)
                 {
                     MasmOperand dst      = isa_result(ctx, ctx->ptr_size);
                     MasmOperand label_op = masm_operand_label(sym->name);
                     masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, label_op));
                     return dst;
+                }
+                if (inner_expr->symbol)
+                {
+                    const char *link_name = symbol_linkage_name(inner_expr->symbol);
+                    if (!link_name) link_name = inner_expr->symbol->name;
+                    if (link_name)
+                    {
+                        MasmOperand dst      = isa_result(ctx, ctx->ptr_size);
+                        MasmOperand label_op = masm_operand_label(link_name);
+                        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, label_op));
+                        return dst;
+                    }
                 }
             }
 
@@ -2756,7 +2776,34 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
             // ISA-specific block: delegate to ISA handler
             if (ctx->isa && ctx->isa->parse_inline_asm)
             {
+                size_t before = text->inst_count;
                 ctx->isa->parse_inline_asm(text, stmt->masm_stmt.isa_content, ctx->ptr_size);
+                if (ctx->symbols)
+                {
+                    for (size_t i = before; i < text->inst_count; i++)
+                    {
+                        MasmInstruction *inst = &text->instructions[i];
+                        for (int j = 0; j < inst->operand_count; j++)
+                        {
+                            const char *name = NULL;
+                            if (inst->operands[j].kind == MASM_OPERAND_SYMBOL)
+                                name = inst->operands[j].symbol;
+                            else if (inst->operands[j].kind == MASM_OPERAND_LABEL)
+                                name = inst->operands[j].label;
+                            if (!name) continue;
+                            Symbol *sym = symbol_table_lookup(ctx->symbols, name);
+                            if (sym)
+                            {
+                                const char *link = symbol_linkage_name(sym);
+                                if (link)
+                                {
+                                    inst->operands[j].kind = MASM_OPERAND_LABEL;
+                                    inst->operands[j].label = strdup(link);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         else if (stmt->masm_stmt.content)
