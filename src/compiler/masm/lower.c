@@ -3924,6 +3924,13 @@ static bool eval_const_int(AstNode *expr, int64_t *out)
         return true;
     }
 
+    // character literal
+    if (expr->kind == AST_EXPR_LIT && expr->lit_expr.kind == TOKEN_LIT_CHAR)
+    {
+        *out = (int64_t)(uint8_t)expr->lit_expr.char_val;
+        return true;
+    }
+
     // unary expression
     if (expr->kind == AST_EXPR_UNARY)
     {
