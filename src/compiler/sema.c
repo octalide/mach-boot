@@ -945,6 +945,7 @@ static bool sema_expr_is_mutable_lvalue(Sema *sema, AstNode *node)
 static int  sema_collect_symbols(Sema *sema, AstNode *node);
 static int  sema_analyze_use(Sema *sema, AstNode *node);
 static void sema_maybe_analyze_symbol_decl_in_module(Sema *sema, SemaModule *mod, Symbol *sym);
+static bool sema_eval_comptime_int(Sema *sema, AstNode *node, int64_t *out_val);
 
 // collect symbols from a statement (first pass - no body analysis)
 static int sema_collect_fun_symbol(Sema *sema, AstNode *node)
@@ -1330,10 +1331,42 @@ static int sema_collect_symbols(Sema *sema, AstNode *node)
         return sema_analyze_use(sema, node);
 
     case AST_COMPTIME:
+        return 0;
+
     case AST_STMT_COMPTIME_IF:
     case AST_STMT_COMPTIME_OR:
-        // comptime statements are processed in the analysis pass
+    {
+        bool cond_val = true;
+        if (node->comptime_if_stmt.cond)
+        {
+            if (sema_analyze_expr(sema, node->comptime_if_stmt.cond) < 0)
+                return 0;
+            int64_t val = 0;
+            if (!sema_eval_comptime_int(sema, node->comptime_if_stmt.cond, &val))
+                return 0;
+            cond_val = (val != 0);
+        }
+
+        AstNode *branch = cond_val
+            ? node->comptime_if_stmt.body
+            : node->comptime_if_stmt.stmt_or;
+
+        node->comptime_if_stmt.taken_branch = branch;
+
+        if (branch && branch->kind == AST_STMT_BLOCK && branch->block_stmt.stmts)
+        {
+            for (int i = 0; i < branch->block_stmt.stmts->count; i++)
+            {
+                if (sema_collect_symbols(sema, branch->block_stmt.stmts->items[i]) < 0)
+                    return -1;
+            }
+        }
+        else if (branch)
+        {
+            return sema_collect_symbols(sema, branch);
+        }
         return 0;
+    }
 
     default:
         return 0;
@@ -1394,6 +1427,14 @@ static int sema_analyze_fwd(Sema *sema, AstNode *node)
     sym->type = target->type;
     sym->kind = target->kind;
     node->type = target->type;
+
+    // for val/var forwarding, point decl at the target's original declaration
+    // so that constant folding in codegen can find the initializer expression
+    if (target->kind == SYMBOL_VARIABLE && target->decl)
+    {
+        sym->decl       = target->decl;
+        sym->is_mutable = target->is_mutable;
+    }
 
     // inherit the target's mangled/export name so codegen resolves to the same symbol
     if (target->export_name)
