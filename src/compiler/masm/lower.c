@@ -1946,12 +1946,32 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
                 }
 
                 MasmSymbol *sym = masm_get_symbol(masm, inner_expr->ident_expr.name);
+                if (!sym && inner_expr->symbol)
+                {
+                    const char *link_name = symbol_linkage_name(inner_expr->symbol);
+                    if (link_name)
+                    {
+                        sym = masm_get_symbol(masm, link_name);
+                    }
+                }
                 if (sym)
                 {
                     MasmOperand dst      = isa_result(ctx, ctx->ptr_size);
                     MasmOperand label_op = masm_operand_label(sym->name);
                     masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, label_op));
                     return dst;
+                }
+                if (inner_expr->symbol)
+                {
+                    const char *link_name = symbol_linkage_name(inner_expr->symbol);
+                    if (!link_name) link_name = inner_expr->symbol->name;
+                    if (link_name)
+                    {
+                        MasmOperand dst      = isa_result(ctx, ctx->ptr_size);
+                        MasmOperand label_op = masm_operand_label(link_name);
+                        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, label_op));
+                        return dst;
+                    }
                 }
             }
 
