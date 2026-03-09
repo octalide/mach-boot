@@ -1409,6 +1409,124 @@ int masm_x86_encode(MasmInstruction inst, uint8_t *buffer, size_t size)
         }
         break;
 
+    case MASM_OP_X86_XCHG_RR:
+        if (inst.operand_count == 2)
+        {
+            uint32_t dst = inst.operands[0].reg.id;
+            uint32_t src = inst.operands[1].reg.id;
+            uint8_t  sz  = inst.operands[0].reg.size;
+            bool     w   = sz == 8;
+            bool     byte = sz == 1;
+            emit_rex(buffer, &offset, size, w, src >= 8, false, dst >= 8);
+            emit_byte(buffer, &offset, size, byte ? 0x86 : 0x87);
+            emit_byte(buffer, &offset, size, encode_modrm(0xC0, reg_low(src), reg_low(dst)));
+        }
+        break;
+
+    case MASM_OP_X86_XCHG_RM:
+        if (inst.operand_count == 2)
+        {
+            uint32_t reg = inst.operands[0].reg.id;
+            uint8_t  sz  = inst.operands[0].reg.size;
+            bool     w   = sz == 8;
+            bool     byte = sz == 1;
+            emit_rex(buffer, &offset, size, w, reg >= 8, inst.operands[1].mem.index.id >= 8, inst.operands[1].mem.base.id >= 8);
+            emit_byte(buffer, &offset, size, byte ? 0x86 : 0x87);
+            emit_mem(buffer, &offset, size, inst.operands[1].mem.base.id, inst.operands[1].mem.index.id, inst.operands[1].mem.scale, (int32_t)inst.operands[1].mem.disp, reg);
+        }
+        break;
+
+    case MASM_OP_X86_LOCK_CMPXCHG_MR:
+        if (inst.operand_count == 2)
+        {
+            uint32_t src = inst.operands[1].reg.id;
+            uint8_t  sz  = inst.operands[1].reg.size;
+            bool     w   = sz == 8;
+            bool     byte = sz == 1;
+            emit_byte(buffer, &offset, size, 0xF0);
+            emit_rex(buffer, &offset, size, w, src >= 8, inst.operands[0].mem.index.id >= 8, inst.operands[0].mem.base.id >= 8);
+            emit_byte(buffer, &offset, size, 0x0F);
+            emit_byte(buffer, &offset, size, byte ? 0xB0 : 0xB1);
+            emit_mem(buffer, &offset, size, inst.operands[0].mem.base.id, inst.operands[0].mem.index.id, inst.operands[0].mem.scale, (int32_t)inst.operands[0].mem.disp, src);
+        }
+        break;
+
+    case MASM_OP_X86_LOCK_XADD_MR:
+        if (inst.operand_count == 2)
+        {
+            uint32_t src = inst.operands[1].reg.id;
+            uint8_t  sz  = inst.operands[1].reg.size;
+            bool     w   = sz == 8;
+            bool     byte = sz == 1;
+            emit_byte(buffer, &offset, size, 0xF0);
+            emit_rex(buffer, &offset, size, w, src >= 8, inst.operands[0].mem.index.id >= 8, inst.operands[0].mem.base.id >= 8);
+            emit_byte(buffer, &offset, size, 0x0F);
+            emit_byte(buffer, &offset, size, byte ? 0xC0 : 0xC1);
+            emit_mem(buffer, &offset, size, inst.operands[0].mem.base.id, inst.operands[0].mem.index.id, inst.operands[0].mem.scale, (int32_t)inst.operands[0].mem.disp, src);
+        }
+        break;
+
+    case MASM_OP_X86_MFENCE:
+        emit_byte(buffer, &offset, size, 0x0F);
+        emit_byte(buffer, &offset, size, 0xAE);
+        emit_byte(buffer, &offset, size, 0xF0);
+        break;
+
+    case MASM_OP_X86_LFENCE:
+        emit_byte(buffer, &offset, size, 0x0F);
+        emit_byte(buffer, &offset, size, 0xAE);
+        emit_byte(buffer, &offset, size, 0xE8);
+        break;
+
+    case MASM_OP_X86_SFENCE:
+        emit_byte(buffer, &offset, size, 0x0F);
+        emit_byte(buffer, &offset, size, 0xAE);
+        emit_byte(buffer, &offset, size, 0xF8);
+        break;
+
+    case MASM_OP_X86_PAUSE:
+        emit_byte(buffer, &offset, size, 0xF3);
+        emit_byte(buffer, &offset, size, 0x90);
+        break;
+
+    case MASM_OP_X86_HLT:
+        emit_byte(buffer, &offset, size, 0xF4);
+        break;
+
+    case MASM_OP_X86_RAW_BYTE:
+        if (inst.operand_count >= 1)
+        {
+            emit_byte(buffer, &offset, size, (uint8_t)inst.operands[0].imm);
+        }
+        break;
+
+    case MASM_OP_X86_JB:
+    case MASM_OP_X86_JAE:
+    case MASM_OP_X86_JBE:
+    case MASM_OP_X86_JA:
+    {
+        uint8_t cc = 0;
+        switch (inst.opcode)
+        {
+        case MASM_OP_X86_JB:
+            cc = 0x82;
+            break;
+        case MASM_OP_X86_JAE:
+            cc = 0x83;
+            break;
+        case MASM_OP_X86_JBE:
+            cc = 0x86;
+            break;
+        case MASM_OP_X86_JA:
+            cc = 0x87;
+            break;
+        }
+        emit_byte(buffer, &offset, size, 0x0F);
+        emit_byte(buffer, &offset, size, cc);
+        emit_imm32(buffer, &offset, size, (int32_t)inst.operands[0].imm);
+    }
+    break;
+
     default:
         break;
     }

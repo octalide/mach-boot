@@ -109,6 +109,32 @@ typedef enum MasmX86Opcode
     MASM_OP_X86_CWD,
     MASM_OP_X86_CDQ,
     MASM_OP_X86_CQO,
+
+    // exchange
+    MASM_OP_X86_XCHG_RR,
+    MASM_OP_X86_XCHG_RM,
+
+    // locked atomics
+    MASM_OP_X86_LOCK_CMPXCHG_MR,
+    MASM_OP_X86_LOCK_XADD_MR,
+
+    // memory barriers
+    MASM_OP_X86_MFENCE,
+    MASM_OP_X86_LFENCE,
+    MASM_OP_X86_SFENCE,
+
+    // cpu hints
+    MASM_OP_X86_PAUSE,
+    MASM_OP_X86_HLT,
+
+    // raw byte emission
+    MASM_OP_X86_RAW_BYTE,
+
+    // unsigned conditional jumps
+    MASM_OP_X86_JB,
+    MASM_OP_X86_JAE,
+    MASM_OP_X86_JBE,
+    MASM_OP_X86_JA,
 } MasmX86Opcode;
 
 // x86 instruction builder macros (convenience wrappers)
