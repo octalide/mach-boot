@@ -11,6 +11,10 @@
 
 #define VREG_START 1024
 
+// internal alias for arithmetic shift right (SAR was removed from the
+// public IR enum but isel still needs the distinction for x86 codegen)
+#define ISEL_SHIFT_SAR 200
+
 typedef struct CodeGenContext
 {
     // Map vreg_id -> stack offset (rbp - offset)
@@ -696,7 +700,7 @@ static void emit_binary_op_explicit(MasmSection *sec, CodeGenContext *ctx, MasmI
     }
 }
 
-static void emit_shift_explicit(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst, MasmIrOpcode op)
+static void emit_shift_explicit(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst, uint32_t op)
 {
     MasmOperand dst = inst->operands[0];
     MasmOperand a   = inst->operands[1];
@@ -738,7 +742,7 @@ static void emit_shift_explicit(MasmSection *sec, CodeGenContext *ctx, MasmInstr
         case MASM_IR_SHR:
             opcode = MASM_OP_X86_SHR_RI;
             break;
-        case MASM_IR_SAR:
+        case ISEL_SHIFT_SAR:
             opcode = MASM_OP_X86_SAR_RI;
             break;
         default:
@@ -756,7 +760,7 @@ static void emit_shift_explicit(MasmSection *sec, CodeGenContext *ctx, MasmInstr
         case MASM_IR_SHR:
             opcode = MASM_OP_X86_SHR_RC;
             break;
-        case MASM_IR_SAR:
+        case ISEL_SHIFT_SAR:
             opcode = MASM_OP_X86_SAR_RC;
             break;
         default:
@@ -859,7 +863,7 @@ static void emit_float_cmp(MasmSection *sec, CodeGenContext *ctx, MasmInstructio
     MasmOperand dst  = inst->operands[0];
     MasmOperand a    = inst->operands[1];
     MasmOperand b    = inst->operands[2];
-    int64_t     cond = inst->operands[3].imm;
+    uint8_t     cond = MASM_META_CC(inst->meta);
 
     // Load a -> XMM0
     if (a.kind == MASM_OPERAND_REGISTER)
@@ -893,22 +897,22 @@ static void emit_float_cmp(MasmSection *sec, CodeGenContext *ctx, MasmInstructio
     MasmX86Opcode setcc_op;
     switch (cond)
     {
-    case MASM_IR_FCMP_EQ:
+    case MASM_CC_EQ:
         setcc_op = MASM_OP_X86_SETE;
         break;
-    case MASM_IR_FCMP_NE:
+    case MASM_CC_NE:
         setcc_op = MASM_OP_X86_SETNE;
         break;
-    case MASM_IR_FCMP_LT:
+    case MASM_CC_LT:
         setcc_op = MASM_OP_X86_SETB;
         break;
-    case MASM_IR_FCMP_LE:
+    case MASM_CC_LE:
         setcc_op = MASM_OP_X86_SETBE;
         break;
-    case MASM_IR_FCMP_GT:
+    case MASM_CC_GT:
         setcc_op = MASM_OP_X86_SETA;
         break;
-    case MASM_IR_FCMP_GE:
+    case MASM_CC_GE:
         setcc_op = MASM_OP_X86_SETAE;
         break;
     default:
@@ -1610,11 +1614,11 @@ static void emit_syscall(MasmSection *sec, CodeGenContext *ctx, MasmInstruction 
 
 static void emit_fconv(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *inst)
 {
-    MasmOperand dst  = inst->operands[0];
-    MasmOperand src  = inst->operands[1];
-    int64_t     mode = inst->operands[2].imm;
+    MasmOperand dst = inst->operands[0];
+    MasmOperand src = inst->operands[1];
+    uint8_t     cc  = MASM_META_CC(inst->meta);
 
-    if (mode == 0) // int -> float
+    if (cc == MASM_CONV_ITOF) // int -> float
     {
         // Load integer src -> RAX
         load_operand(sec, ctx, src, MASM_X86_RAX, 0);
@@ -1633,7 +1637,7 @@ static void emit_fconv(MasmSection *sec, CodeGenContext *ctx, MasmInstruction *i
             emit_inst(sec, masm_x86_inst_2(MASM_OP_X86_MOVQ, mem, masm_operand_register(0, 16)));
         }
     }
-    else if (mode == 1) // float -> int
+    else if (cc == MASM_CONV_FTOI) // float -> int
     {
         // Load float src -> XMM0
         if (src.kind == MASM_OPERAND_REGISTER)
@@ -1826,18 +1830,27 @@ static void x86_64_codegen(Masm *masm)
                 case MASM_IR_STORE:
                     emit_store(out, &ctx, inst);
                     break;
-                case MASM_IR_LEA:
+                case MASM_IR_ADDR:
                     emit_lea(out, &ctx, inst);
                     break;
 
                 case MASM_IR_ADD:
-                    emit_binary_op_explicit(out, &ctx, inst, MASM_IR_ADD);
+                    if (MASM_META_CC(inst->meta) == MASM_ALU_FLOAT)
+                        emit_float_op(out, &ctx, inst, MASM_OP_X86_ADDSD);
+                    else
+                        emit_binary_op_explicit(out, &ctx, inst, MASM_IR_ADD);
                     break;
                 case MASM_IR_SUB:
-                    emit_binary_op_explicit(out, &ctx, inst, MASM_IR_SUB);
+                    if (MASM_META_CC(inst->meta) == MASM_ALU_FLOAT)
+                        emit_float_op(out, &ctx, inst, MASM_OP_X86_SUBSD);
+                    else
+                        emit_binary_op_explicit(out, &ctx, inst, MASM_IR_SUB);
                     break;
                 case MASM_IR_MUL:
-                    emit_binary_op_explicit(out, &ctx, inst, MASM_IR_MUL);
+                    if (MASM_META_CC(inst->meta) == MASM_ALU_FLOAT)
+                        emit_float_op(out, &ctx, inst, MASM_OP_X86_MULSD);
+                    else
+                        emit_binary_op_explicit(out, &ctx, inst, MASM_IR_MUL);
                     break;
                 case MASM_IR_AND:
                     emit_binary_op_explicit(out, &ctx, inst, MASM_IR_AND);
@@ -1850,17 +1863,20 @@ static void x86_64_codegen(Masm *masm)
                     break;
 
                 case MASM_IR_DIV:
-                    emit_div_rem(out, &ctx, inst, true, false);
+                {
+                    uint8_t cc = MASM_META_CC(inst->meta);
+                    if (cc == MASM_DIV_FLOAT)
+                    {
+                        emit_float_op(out, &ctx, inst, MASM_OP_X86_DIVSD);
+                    }
+                    else
+                    {
+                        bool is_signed = (cc == MASM_DIV_QUOT || cc == MASM_DIV_REM);
+                        bool is_rem = (cc == MASM_DIV_REM || cc == MASM_DIV_UREM);
+                        emit_div_rem(out, &ctx, inst, is_signed, is_rem);
+                    }
                     break;
-                case MASM_IR_DIVU:
-                    emit_div_rem(out, &ctx, inst, false, false);
-                    break;
-                case MASM_IR_REM:
-                    emit_div_rem(out, &ctx, inst, true, true);
-                    break;
-                case MASM_IR_REMU:
-                    emit_div_rem(out, &ctx, inst, false, true);
-                    break;
+                }
 
                 case MASM_IR_NEG:
                     emit_unary_op_explicit(out, &ctx, inst, MASM_IR_NEG);
@@ -1869,85 +1885,65 @@ static void x86_64_codegen(Masm *masm)
                     emit_unary_op_explicit(out, &ctx, inst, MASM_IR_NOT);
                     break;
 
-                case MASM_IR_ZEXT:
-                    emit_zext(out, &ctx, inst);
-                    break;
-                case MASM_IR_SEXT:
-                    emit_sext(out, &ctx, inst);
-                    break;
-
                 case MASM_IR_SHL:
                     emit_shift_explicit(out, &ctx, inst, MASM_IR_SHL);
                     break;
                 case MASM_IR_SHR:
-                    emit_shift_explicit(out, &ctx, inst, MASM_IR_SHR);
-                    break;
-                case MASM_IR_SAR:
-                    emit_shift_explicit(out, &ctx, inst, MASM_IR_SAR);
+                    emit_shift_explicit(out, &ctx, inst,
+                        (MASM_META_CC(inst->meta) == MASM_SHR_ARITHMETIC) ? ISEL_SHIFT_SAR : MASM_IR_SHR);
                     break;
 
-                case MASM_IR_FADD:
-                    emit_float_op(out, &ctx, inst, MASM_OP_X86_ADDSD);
+                case MASM_IR_CMP:
+                {
+                    uint8_t cc = MASM_META_CC(inst->meta);
+                    uint8_t flag = MASM_META_FLAG(inst->meta);
+                    if (flag)
+                    {
+                        emit_float_cmp(out, &ctx, inst);
+                    }
+                    else
+                    {
+                        MasmX86Opcode setcc_op;
+                        switch (cc)
+                        {
+                        case MASM_CC_EQ:  setcc_op = MASM_OP_X86_SETE;  break;
+                        case MASM_CC_NE:  setcc_op = MASM_OP_X86_SETNE; break;
+                        case MASM_CC_LT:  setcc_op = MASM_OP_X86_SETL;  break;
+                        case MASM_CC_GT:  setcc_op = MASM_OP_X86_SETG;  break;
+                        case MASM_CC_LE:  setcc_op = MASM_OP_X86_SETLE; break;
+                        case MASM_CC_GE:  setcc_op = MASM_OP_X86_SETGE; break;
+                        case MASM_CC_ULT: setcc_op = MASM_OP_X86_SETB;  break;
+                        case MASM_CC_UGT: setcc_op = MASM_OP_X86_SETA;  break;
+                        case MASM_CC_ULE: setcc_op = MASM_OP_X86_SETBE; break;
+                        case MASM_CC_UGE: setcc_op = MASM_OP_X86_SETAE; break;
+                        default:          setcc_op = MASM_OP_X86_SETE;  break;
+                        }
+                        emit_setcc(out, &ctx, inst, setcc_op);
+                    }
                     break;
-                case MASM_IR_FSUB:
-                    emit_float_op(out, &ctx, inst, MASM_OP_X86_SUBSD);
-                    break;
-                case MASM_IR_FMUL:
-                    emit_float_op(out, &ctx, inst, MASM_OP_X86_MULSD);
-                    break;
-                case MASM_IR_FDIV:
-                    emit_float_op(out, &ctx, inst, MASM_OP_X86_DIVSD);
-                    break;
-                case MASM_IR_FCMP:
-                    emit_float_cmp(out, &ctx, inst);
-                    break;
-                case MASM_IR_FCONV:
-                    emit_fconv(out, &ctx, inst);
-                    break;
+                }
 
-                case MASM_IR_SEQ:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETE);
+                case MASM_IR_BRANCH:
+                {
+                    uint8_t cc = MASM_META_CC(inst->meta);
+                    MasmX86Opcode jcc_op;
+                    switch (cc)
+                    {
+                    case MASM_CC_EQ:  jcc_op = MASM_OP_X86_JE;  break;
+                    case MASM_CC_NE:  jcc_op = MASM_OP_X86_JNE; break;
+                    case MASM_CC_LT:  jcc_op = MASM_OP_X86_JL;  break;
+                    case MASM_CC_GE:  jcc_op = MASM_OP_X86_JGE; break;
+                    case MASM_CC_ULT: jcc_op = MASM_OP_X86_JB;  break;
+                    case MASM_CC_UGE: jcc_op = MASM_OP_X86_JAE; break;
+                    case MASM_CC_GT:  jcc_op = MASM_OP_X86_JG;  break;
+                    case MASM_CC_LE:  jcc_op = MASM_OP_X86_JLE; break;
+                    case MASM_CC_UGT: jcc_op = MASM_OP_X86_JA;  break;
+                    case MASM_CC_ULE: jcc_op = MASM_OP_X86_JBE; break;
+                    default:          jcc_op = MASM_OP_X86_JE;  break;
+                    }
+                    emit_cmp_branch(out, &ctx, inst, jcc_op);
                     break;
-                case MASM_IR_SNE:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETNE);
-                    break;
-                case MASM_IR_SLT:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETL);
-                    break;
-                case MASM_IR_SGT:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETG);
-                    break;
-                case MASM_IR_SLE:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETLE);
-                    break;
-                case MASM_IR_SGE:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETGE);
-                    break;
-                case MASM_IR_SLTU:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETB);
-                    break;
-                case MASM_IR_SGTU:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETA);
-                    break;
-                case MASM_IR_SLEU:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETBE);
-                    break;
-                case MASM_IR_SGEU:
-                    emit_setcc(out, &ctx, inst, MASM_OP_X86_SETAE);
-                    break;
-
-                case MASM_IR_BEQ:
-                    emit_cmp_branch(out, &ctx, inst, MASM_OP_X86_JE);
-                    break;
-                case MASM_IR_BNE:
-                    emit_cmp_branch(out, &ctx, inst, MASM_OP_X86_JNE);
-                    break;
-                case MASM_IR_BLT:
-                    emit_cmp_branch(out, &ctx, inst, MASM_OP_X86_JL);
-                    break;
-                case MASM_IR_BGE:
-                    emit_cmp_branch(out, &ctx, inst, MASM_OP_X86_JGE);
-                    break;
+                }
 
                 case MASM_IR_JMP:
                     emit_inst(out, masm_x86_inst_1(MASM_OP_X86_JMP_REL, inst->operands[0]));
@@ -1961,6 +1957,22 @@ static void x86_64_codegen(Masm *masm)
                 case MASM_IR_SYSCALL:
                     emit_syscall(out, &ctx, inst);
                     break;
+
+                case MASM_IR_CONV:
+                {
+                    uint8_t cc = MASM_META_CC(inst->meta);
+                    switch (cc)
+                    {
+                    case MASM_CONV_ZEXT:   emit_zext(out, &ctx, inst);  break;
+                    case MASM_CONV_SEXT:   emit_sext(out, &ctx, inst);  break;
+                    case MASM_CONV_ITOF:
+                    case MASM_CONV_FTOI:
+                    case MASM_CONV_FEXT:
+                    case MASM_CONV_FTRUNC: emit_fconv(out, &ctx, inst); break;
+                    default:               emit_zext(out, &ctx, inst);  break;
+                    }
+                    break;
+                }
 
                 default:
                     // Unknown IR opcode - preserve as-is
