@@ -3034,13 +3034,56 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
     }
 }
 
+static uint8_t parse_mo_suffix(const char *s)
+{
+    if (strcmp(s, "relaxed") == 0) return MASM_MO_RELAXED;
+    if (strcmp(s, "acquire") == 0) return MASM_MO_ACQUIRE;
+    if (strcmp(s, "release") == 0) return MASM_MO_RELEASE;
+    if (strcmp(s, "acq_rel") == 0) return MASM_MO_ACQ_REL;
+    if (strcmp(s, "seq_cst") == 0) return MASM_MO_SEQ_CST;
+    return MASM_MO_SEQ_CST;
+}
+
+static uint8_t parse_rmw_suffix(const char *s)
+{
+    if (strcmp(s, "add") == 0)  return MASM_RMW_ADD;
+    if (strcmp(s, "sub") == 0)  return MASM_RMW_SUB;
+    if (strcmp(s, "and") == 0)  return MASM_RMW_AND;
+    if (strcmp(s, "or") == 0)   return MASM_RMW_OR;
+    if (strcmp(s, "xor") == 0)  return MASM_RMW_XOR;
+    if (strcmp(s, "xchg") == 0) return MASM_RMW_XCHG;
+    return MASM_RMW_ADD;
+}
+
+static int parse_comma_operands(const char *str, MasmOperand *ops, int max_ops, LowerContext *ctx)
+{
+    if (!str) return 0;
+    char *copy     = strdup(str);
+    char *saveptr  = NULL;
+    char *tok      = strtok_r(copy, ",", &saveptr);
+    int   count    = 0;
+
+    while (tok && count < max_ops)
+    {
+        while (*tok == ' ' || *tok == '\t') tok++;
+        size_t len = strlen(tok);
+        while (len > 0 && (tok[len - 1] == ' ' || tok[len - 1] == '\t'))
+            tok[--len] = '\0';
+        if (*tok != '\0')
+            ops[count++] = parse_operand(tok, ctx);
+        tok = strtok_r(NULL, ",", &saveptr);
+    }
+
+    free(copy);
+    return count;
+}
+
 static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content, LowerContext *ctx)
 {
     (void)masm;
 
-    // simple parser for inline masm blocks
-    // format: "opcode operand1, operand2"
-    // for now, support basic syscall pattern
+    // portable inline asm parser
+    // supports MASM IR mnemonics with dot-suffix variants
     char *line    = strdup(content);
     char *saveptr = NULL;
     char *token   = strtok_r(line, "\n;", &saveptr);
@@ -3335,6 +3378,89 @@ static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content
                 MasmOperand dst_op = parse_operand(dest, ctx);
                 MasmOperand src_op = parse_operand(src, ctx);
                 masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(MASM_CONV_SEXT, 0), dst_op, src_op));
+            }
+        }
+        else if (strcmp(token, "trap") == 0)
+        {
+            masm_section_append_inst(text, masm_inst_0(MASM_IR_TRAP));
+        }
+        else if (strncmp(token, "hint.", 5) == 0)
+        {
+            uint8_t kind = MASM_HINT_PAUSE;
+            if (strcmp(token + 5, "pause") != 0)
+                kind = MASM_HINT_PAUSE;
+            masm_section_append_inst(text, masm_inst_0m(MASM_IR_HINT, MASM_META(kind, 0)));
+        }
+        else if (strncmp(token, "fence", 5) == 0)
+        {
+            uint8_t mo = MASM_MO_SEQ_CST;
+            if (token[5] == '.')
+                mo = parse_mo_suffix(token + 6);
+            masm_section_append_inst(text, masm_inst_0m(MASM_IR_FENCE, MASM_META(mo, 0)));
+        }
+        else if (strncmp(token, "atomic.", 7) == 0)
+        {
+            char *space = strchr(token, ' ');
+            char  mnemonic[64];
+
+            if (space)
+            {
+                size_t mlen = (size_t)(space - token);
+                if (mlen >= sizeof(mnemonic)) mlen = sizeof(mnemonic) - 1;
+                memcpy(mnemonic, token, mlen);
+                mnemonic[mlen] = '\0';
+            }
+            else
+            {
+                strncpy(mnemonic, token, sizeof(mnemonic) - 1);
+                mnemonic[sizeof(mnemonic) - 1] = '\0';
+            }
+
+            const char *operand_str = space ? space + 1 : NULL;
+
+            if (strncmp(mnemonic, "atomic.load.", 12) == 0)
+            {
+                uint8_t     mo = parse_mo_suffix(mnemonic + 12);
+                MasmOperand ops[2];
+                int         count = parse_comma_operands(operand_str, ops, 2, ctx);
+                if (count == 2)
+                    masm_section_append_inst(text, masm_inst_2m(MASM_IR_ATOMIC_LOAD, MASM_META(mo, 0), ops[0], ops[1]));
+            }
+            else if (strncmp(mnemonic, "atomic.store.", 13) == 0)
+            {
+                uint8_t     mo = parse_mo_suffix(mnemonic + 13);
+                MasmOperand ops[2];
+                int         count = parse_comma_operands(operand_str, ops, 2, ctx);
+                if (count == 2)
+                    masm_section_append_inst(text, masm_inst_2m(MASM_IR_ATOMIC_STORE, MASM_META(mo, 0), ops[0], ops[1]));
+            }
+            else if (strncmp(mnemonic, "atomic.cas.", 11) == 0)
+            {
+                uint8_t     mo = parse_mo_suffix(mnemonic + 11);
+                MasmOperand ops[4];
+                int         count = parse_comma_operands(operand_str, ops, 4, ctx);
+                if (count == 4)
+                    masm_section_append_inst(text, masm_inst_4m(MASM_IR_ATOMIC_CAS, MASM_META(mo, 0), ops[0], ops[1], ops[2], ops[3]));
+            }
+            else if (strncmp(mnemonic, "atomic.rmw.", 11) == 0)
+            {
+                const char *rest = mnemonic + 11;
+                const char *dot  = strchr(rest, '.');
+                if (dot)
+                {
+                    char kind_str[16];
+                    size_t klen = (size_t)(dot - rest);
+                    if (klen >= sizeof(kind_str)) klen = sizeof(kind_str) - 1;
+                    memcpy(kind_str, rest, klen);
+                    kind_str[klen] = '\0';
+
+                    uint8_t     rmw_kind = parse_rmw_suffix(kind_str);
+                    uint8_t     mo       = parse_mo_suffix(dot + 1);
+                    MasmOperand ops[3];
+                    int         count = parse_comma_operands(operand_str, ops, 3, ctx);
+                    if (count == 3)
+                        masm_section_append_inst(text, masm_inst_3m(MASM_IR_ATOMIC_RMW, MASM_RMW_META(mo, rmw_kind), ops[0], ops[1], ops[2]));
+                }
             }
         }
 

@@ -137,11 +137,23 @@ typedef enum MasmIrOpcode
 #define MASM_MO_ACQ_REL 3
 #define MASM_MO_SEQ_CST 4
 
+// atomic RMW operations (stored in size_log2 bits of meta for MASM_IR_ATOMIC_RMW)
+#define MASM_RMW_ADD  0
+#define MASM_RMW_SUB  1
+#define MASM_RMW_AND  2
+#define MASM_RMW_OR   3
+#define MASM_RMW_XOR  4
+#define MASM_RMW_XCHG 5
+
 // meta byte encoding: cc:4 | size_log2:3 | flag:1
 // size_log2 is unused in mach-boot (sizes come from operands)
 #define MASM_META(cc, flag) ((uint8_t)(((cc) << 4) | ((flag) & 1)))
 #define MASM_META_CC(meta)  ((uint8_t)(((meta) >> 4) & 0xF))
 #define MASM_META_FLAG(meta) ((uint8_t)((meta) & 1))
+
+// atomic RMW meta: mo in cc field (bits 7-4), rmw_kind in size_log2 field (bits 3-1)
+#define MASM_RMW_META(mo, rmw_kind) ((uint8_t)(((mo) << 4) | (((rmw_kind) & 0x7) << 1)))
+#define MASM_META_RMW_KIND(meta)    ((uint8_t)(((meta) >> 1) & 0x7))
 
 // opcode namespace discriminator
 typedef enum MasmOpcodeKind
@@ -176,6 +188,7 @@ MasmInstruction masm_inst_0m(uint32_t opcode, uint8_t meta);
 MasmInstruction masm_inst_1m(uint32_t opcode, uint8_t meta, MasmOperand op1);
 MasmInstruction masm_inst_2m(uint32_t opcode, uint8_t meta, MasmOperand op1, MasmOperand op2);
 MasmInstruction masm_inst_3m(uint32_t opcode, uint8_t meta, MasmOperand op1, MasmOperand op2, MasmOperand op3);
+MasmInstruction masm_inst_4m(uint32_t opcode, uint8_t meta, MasmOperand op1, MasmOperand op2, MasmOperand op3, MasmOperand op4);
 
 // target-specific instruction builders (for use by isel)
 MasmInstruction masm_inst_target_create(MasmOpcodeKind kind, uint32_t opcode, MasmOperand *operands, uint8_t count);
