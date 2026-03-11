@@ -580,6 +580,22 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_NOT_R, dst));
             }
         }
+        // inc dst
+        else if (strncmp(token, "inc ", 4) == 0)
+        {
+            if (parse_one_op(token + 4, &dst, ptr_size, locals, local_count, fp_reg))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_INC_R, dst));
+            }
+        }
+        // dec dst
+        else if (strncmp(token, "dec ", 4) == 0)
+        {
+            if (parse_one_op(token + 4, &dst, ptr_size, locals, local_count, fp_reg))
+            {
+                masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_DEC_R, dst));
+            }
+        }
         // lock cmpxchg [mem], reg
         else if (strncmp(token, "lock cmpxchg ", 13) == 0)
         {
