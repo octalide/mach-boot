@@ -407,8 +407,8 @@ static void emit_va_arg_load(Masm *masm, MasmSection *text, LowerContext *ctx, M
 
     // compare offset < threshold
     MasmOperand cmp_result = alloc_vreg(ctx, 1);
-    masm_section_append_inst(text, masm_inst_3(MASM_IR_SLTU, cmp_result, off_64, masm_operand_imm(threshold)));
-    masm_section_append_inst(text, masm_inst_3(MASM_IR_BEQ, cmp_result, masm_operand_imm(0), masm_operand_label(stack_label)));
+    masm_section_append_inst(text, masm_inst_3m(MASM_IR_CMP, MASM_META(MASM_CC_ULT, 0), cmp_result, off_64, masm_operand_imm(threshold)));
+    masm_section_append_inst(text, masm_inst_3m(MASM_IR_BRANCH, MASM_META(MASM_CC_EQ, 0), cmp_result, masm_operand_imm(0), masm_operand_label(stack_label)));
 
     // reg path: load from reg_save_area + offset
     MasmOperand regsave     = alloc_vreg(ctx, ctx->ptr_size);
@@ -661,22 +661,27 @@ static MasmOperand lower_binary_op(MasmSection *text, TokenKind op, MasmOperand 
     }
 
     MasmIrOpcode opcode;
+    uint8_t      meta = 0;
 
     if (is_float)
     {
         switch (op)
         {
         case TOKEN_PLUS:
-            opcode = MASM_IR_FADD;
+            opcode = MASM_IR_ADD;
+            meta   = MASM_META(MASM_ALU_FLOAT, 0);
             break;
         case TOKEN_MINUS:
-            opcode = MASM_IR_FSUB;
+            opcode = MASM_IR_SUB;
+            meta   = MASM_META(MASM_ALU_FLOAT, 0);
             break;
         case TOKEN_STAR:
-            opcode = MASM_IR_FMUL;
+            opcode = MASM_IR_MUL;
+            meta   = MASM_META(MASM_ALU_FLOAT, 0);
             break;
         case TOKEN_SLASH:
-            opcode = MASM_IR_FDIV;
+            opcode = MASM_IR_DIV;
+            meta   = MASM_META(MASM_DIV_FLOAT, 0);
             break;
         case TOKEN_EQUAL_EQUAL:
         case TOKEN_BANG_EQUAL:
@@ -685,33 +690,33 @@ static MasmOperand lower_binary_op(MasmSection *text, TokenKind op, MasmOperand 
         case TOKEN_GREATER:
         case TOKEN_GREATER_EQUAL:
         {
-            MasmIrFcmpCond cond;
+            uint8_t cc;
             switch (op)
             {
             case TOKEN_EQUAL_EQUAL:
-                cond = MASM_IR_FCMP_EQ;
+                cc = MASM_CC_EQ;
                 break;
             case TOKEN_BANG_EQUAL:
-                cond = MASM_IR_FCMP_NE;
+                cc = MASM_CC_NE;
                 break;
             case TOKEN_LESS:
-                cond = MASM_IR_FCMP_LT;
+                cc = MASM_CC_LT;
                 break;
             case TOKEN_LESS_EQUAL:
-                cond = MASM_IR_FCMP_LE;
+                cc = MASM_CC_LE;
                 break;
             case TOKEN_GREATER:
-                cond = MASM_IR_FCMP_GT;
+                cc = MASM_CC_GT;
                 break;
             case TOKEN_GREATER_EQUAL:
-                cond = MASM_IR_FCMP_GE;
+                cc = MASM_CC_GE;
                 break;
             default:
                 fprintf(stderr, "masm lower: unhandled float comparison %d\n", op);
                 exit(1);
             }
             MasmOperand res = isa_result(ctx, size);
-            masm_section_append_inst(text, masm_inst_4(MASM_IR_FCMP, res, left, right, masm_operand_imm(cond)));
+            masm_section_append_inst(text, masm_inst_3m(MASM_IR_CMP, MASM_META(cc, 1), res, left, right));
             return res;
         }
         default:
@@ -733,10 +738,12 @@ static MasmOperand lower_binary_op(MasmSection *text, TokenKind op, MasmOperand 
             opcode = MASM_IR_MUL;
             break;
         case TOKEN_SLASH:
-            opcode = is_signed ? MASM_IR_DIV : MASM_IR_DIVU;
+            opcode = MASM_IR_DIV;
+            meta   = is_signed ? 0 : MASM_META(MASM_DIV_UQUOT, 0);
             break;
         case TOKEN_PERCENT:
-            opcode = is_signed ? MASM_IR_REM : MASM_IR_REMU;
+            opcode = MASM_IR_DIV;
+            meta   = is_signed ? MASM_META(MASM_DIV_REM, 0) : MASM_META(MASM_DIV_UREM, 0);
             break;
         case TOKEN_AMPERSAND:
             opcode = MASM_IR_AND;
@@ -751,25 +758,32 @@ static MasmOperand lower_binary_op(MasmSection *text, TokenKind op, MasmOperand 
             opcode = MASM_IR_SHL;
             break;
         case TOKEN_GREATER_GREATER:
-            opcode = is_signed ? MASM_IR_SAR : MASM_IR_SHR;
+            opcode = MASM_IR_SHR;
+            meta   = is_signed ? MASM_META(MASM_SHR_ARITHMETIC, 0) : 0;
             break;
         case TOKEN_EQUAL_EQUAL:
-            opcode = MASM_IR_SEQ;
+            opcode = MASM_IR_CMP;
+            meta   = MASM_META(MASM_CC_EQ, 0);
             break;
         case TOKEN_BANG_EQUAL:
-            opcode = MASM_IR_SNE;
+            opcode = MASM_IR_CMP;
+            meta   = MASM_META(MASM_CC_NE, 0);
             break;
         case TOKEN_LESS:
-            opcode = is_signed ? MASM_IR_SLT : MASM_IR_SLTU;
+            opcode = MASM_IR_CMP;
+            meta   = is_signed ? MASM_META(MASM_CC_LT, 0) : MASM_META(MASM_CC_ULT, 0);
             break;
         case TOKEN_LESS_EQUAL:
-            opcode = is_signed ? MASM_IR_SLE : MASM_IR_SLEU;
+            opcode = MASM_IR_CMP;
+            meta   = is_signed ? MASM_META(MASM_CC_LE, 0) : MASM_META(MASM_CC_ULE, 0);
             break;
         case TOKEN_GREATER:
-            opcode = is_signed ? MASM_IR_SGT : MASM_IR_SGTU;
+            opcode = MASM_IR_CMP;
+            meta   = is_signed ? MASM_META(MASM_CC_GT, 0) : MASM_META(MASM_CC_UGT, 0);
             break;
         case TOKEN_GREATER_EQUAL:
-            opcode = is_signed ? MASM_IR_SGE : MASM_IR_SGEU;
+            opcode = MASM_IR_CMP;
+            meta   = is_signed ? MASM_META(MASM_CC_GE, 0) : MASM_META(MASM_CC_UGE, 0);
             break;
         default:
             fprintf(stderr, "masm lower: unhandled binary op %d\n", op);
@@ -778,7 +792,7 @@ static MasmOperand lower_binary_op(MasmSection *text, TokenKind op, MasmOperand 
     }
 
     MasmOperand res = isa_result(ctx, size);
-    masm_section_append_inst(text, masm_inst_3(opcode, res, left, right));
+    masm_section_append_inst(text, masm_inst_3m(opcode, meta, res, left, right));
     return res;
 }
 
@@ -803,19 +817,19 @@ static MasmOperand lower_short_circuit(Masm *masm, MasmSection *text, AstNode *e
     if (is_and)
     {
         // AND: if res == 0, jump to end (result is 0)
-        masm_section_append_inst(text, masm_inst_3(MASM_IR_BEQ, res, masm_operand_imm(0), masm_operand_label(label_end)));
+        masm_section_append_inst(text, masm_inst_3m(MASM_IR_BRANCH, MASM_META(MASM_CC_EQ, 0), res, masm_operand_imm(0), masm_operand_label(label_end)));
     }
     else
     {
         // OR: if res != 0, jump to label1 (set result to 1)
-        masm_section_append_inst(text, masm_inst_3(MASM_IR_BNE, res, masm_operand_imm(0), masm_operand_label(label1)));
+        masm_section_append_inst(text, masm_inst_3m(MASM_IR_BRANCH, MASM_META(MASM_CC_NE, 0), res, masm_operand_imm(0), masm_operand_label(label1)));
     }
 
     // Evaluate Right
     MasmOperand right = lower_expr(masm, text, expr->binary_expr.right, ctx);
 
     // Result = (right != 0)
-    masm_section_append_inst(text, masm_inst_3(MASM_IR_SNE, res, right, masm_operand_imm(0)));
+    masm_section_append_inst(text, masm_inst_3m(MASM_IR_CMP, MASM_META(MASM_CC_NE, 0), res, right, masm_operand_imm(0)));
     masm_section_append_inst(text, masm_inst_1(MASM_IR_JMP, masm_operand_label(label_end)));
 
     if (!is_and)
@@ -867,7 +881,7 @@ static MasmOperand lower_assign(Masm *masm, MasmSection *text, AstNode *expr, Lo
             MasmOperand src_ptr = isa_tmp(ctx, ctx->ptr_size);
             if (val.kind == MASM_OPERAND_MEMORY)
             {
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, val));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, val));
             }
             else if (val.kind == MASM_OPERAND_REGISTER)
             {
@@ -907,7 +921,7 @@ static MasmOperand lower_assign(Masm *masm, MasmSection *text, AstNode *expr, Lo
         MasmOperand left_mem = lower_expr(masm, text, lhs, ctx);
 
         MasmOperand dst_ptr = isa_result(ctx, ctx->ptr_size);
-        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst_ptr, left_mem));
+        masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst_ptr, left_mem));
 
         MasmOperand val = lower_expr(masm, text, rhs, ctx);
 
@@ -928,7 +942,7 @@ static MasmOperand lower_assign(Masm *masm, MasmSection *text, AstNode *expr, Lo
             MasmOperand src_ptr = isa_tmp(ctx, ctx->ptr_size);
             if (val.kind == MASM_OPERAND_MEMORY)
             {
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, val));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, val));
             }
             else if (val.kind == MASM_OPERAND_REGISTER)
             {
@@ -981,12 +995,12 @@ static MasmOperand lower_assign(Masm *masm, MasmSection *text, AstNode *expr, Lo
             {
                 MasmOperand dst_ptr  = isa_result(ctx, ctx->ptr_size);
                 MasmOperand dst_addr = frame_mem(ctx, var->offset, ctx->ptr_size);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst_ptr, dst_addr));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst_ptr, dst_addr));
 
                 MasmOperand src_ptr = isa_tmp(ctx, ctx->ptr_size);
                 if (val.kind == MASM_OPERAND_MEMORY)
                 {
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, val));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, val));
                 }
                 else if (val.kind == MASM_OPERAND_REGISTER)
                 {
@@ -1034,7 +1048,7 @@ static MasmOperand lower_assign(Masm *masm, MasmSection *text, AstNode *expr, Lo
             }
 
             MasmOperand addr = isa_result(ctx, ctx->ptr_size);
-            masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, addr, sym_op));
+            masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, addr, sym_op));
 
             MasmOperand val = lower_expr(masm, text, rhs, ctx);
 
@@ -1051,7 +1065,7 @@ static MasmOperand lower_assign(Masm *masm, MasmSection *text, AstNode *expr, Lo
                 MasmOperand src_ptr = isa_tmp(ctx, ctx->ptr_size);
                 if (val.kind == MASM_OPERAND_MEMORY)
                 {
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, val));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, val));
                 }
                 else if (val.kind == MASM_OPERAND_REGISTER)
                 {
@@ -1104,7 +1118,7 @@ static MasmOperand lower_unary_op(MasmSection *text, TokenKind op, MasmOperand o
     if (op == TOKEN_BANG)
     {
         // !x -> x == 0
-        masm_section_append_inst(text, masm_inst_3(MASM_IR_SEQ, res, operand, masm_operand_imm(0)));
+        masm_section_append_inst(text, masm_inst_3m(MASM_IR_CMP, MASM_META(MASM_CC_EQ, 0), res, operand, masm_operand_imm(0)));
     }
     else if (op == TOKEN_MINUS)
     {
@@ -1119,7 +1133,7 @@ static MasmOperand lower_unary_op(MasmSection *text, TokenKind op, MasmOperand o
             zero.reg.class    = MASM_REG_CLASS_FLOAT;
             operand.reg.class = MASM_REG_CLASS_FLOAT;
             res.reg.class     = MASM_REG_CLASS_FLOAT;
-            masm_section_append_inst(text, masm_inst_3(MASM_IR_FSUB, res, zero, operand));
+            masm_section_append_inst(text, masm_inst_3m(MASM_IR_SUB, MASM_META(MASM_ALU_FLOAT, 0), res, zero, operand));
         }
         else
         {
@@ -1192,14 +1206,14 @@ static MasmOperand lower_call_with_sret(Masm *masm, MasmSection *text, AstNode *
             int32_t     overflow_off = 16 + ctx->va_named_stack_slots * 8;
             MasmOperand overflow_ptr = alloc_vreg(ctx, ctx->ptr_size);
             MasmOperand overflow_src = frame_mem(ctx, overflow_off, ctx->ptr_size);
-            masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, overflow_ptr, overflow_src));
+            masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, overflow_ptr, overflow_src));
             MasmOperand overflow_mem = masm_operand_memory_simple(ap.reg.id, 8, ctx->ptr_size);
             masm_section_append_inst(text, masm_inst_3(MASM_IR_STORE, overflow_mem, overflow_ptr, masm_operand_imm(ctx->ptr_size)));
 
             // reg_save_area = RBP + va_reg_save_off
             MasmOperand regsave_ptr = alloc_vreg(ctx, ctx->ptr_size);
             MasmOperand regsave_src = frame_mem(ctx, ctx->va_reg_save_off, ctx->ptr_size);
-            masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, regsave_ptr, regsave_src));
+            masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, regsave_ptr, regsave_src));
             MasmOperand regsave_mem = masm_operand_memory_simple(ap.reg.id, 16, ctx->ptr_size);
             masm_section_append_inst(text, masm_inst_3(MASM_IR_STORE, regsave_mem, regsave_ptr, masm_operand_imm(ctx->ptr_size)));
 
@@ -1290,7 +1304,7 @@ static MasmOperand lower_call_with_sret(Masm *masm, MasmSection *text, AstNode *
             // Create the sret pointer (LEA of the buffer)
             sret_ptr            = alloc_vreg(ctx, ctx->ptr_size);
             MasmOperand buf_mem = frame_mem(ctx, sret_buf_offset, ctx->ptr_size);
-            masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, sret_ptr, buf_mem));
+            masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, sret_ptr, buf_mem));
 
 #ifdef MASM_DEBUG
             fprintf(stderr, "[lower_call] sret: allocated %zu bytes at rbp%+d for return type size=%zu\n", ret_size, sret_buf_offset, expr->type->size);
@@ -1401,7 +1415,7 @@ static MasmOperand lower_call_with_sret(Masm *masm, MasmSection *text, AstNode *
                     if (op.kind == MASM_OPERAND_MEMORY)
                     {
                         MasmOperand addr_reg = alloc_vreg(ctx, ctx->ptr_size);
-                        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, addr_reg, op));
+                        masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, addr_reg, op));
                         op = addr_reg;
                     }
                     // else op is already a register holding the address
@@ -1548,7 +1562,7 @@ static MasmOperand lower_cast(Masm *masm, MasmSection *text, AstNode *expr, Lowe
         if (src.kind == MASM_OPERAND_MEMORY)
         {
             ptr = alloc_vreg(ctx, ctx->ptr_size);
-            masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, ptr, src));
+            masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, ptr, src));
         }
         else
         {
@@ -1580,22 +1594,20 @@ static MasmOperand lower_cast(Masm *masm, MasmSection *text, AstNode *expr, Lowe
 
     if (dst_fp || src_fp)
     {
-        // FCONV mode: 0=i2f, 1=f2i, 2=f2f
-        int mode = 0;
+        uint8_t conv_kind;
         if (src_fp && dst_fp)
         {
-            mode = 2;
+            conv_kind = (dst_size > src_size) ? MASM_CONV_FEXT : MASM_CONV_FTRUNC;
         }
         else if (src_fp)
         {
-            mode = 1;
+            conv_kind = MASM_CONV_FTOI;
         }
         else
         {
-            mode = 0;
+            conv_kind = MASM_CONV_ITOF;
         }
-
-        masm_section_append_inst(text, masm_inst_3(MASM_IR_FCONV, dst, src, masm_operand_imm(mode)));
+        masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(conv_kind, 0), dst, src));
     }
     else
     {
@@ -1609,12 +1621,12 @@ static MasmOperand lower_cast(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             if (src_signed && dst_signed)
             {
                 // signed -> signed: sign-extend to preserve numeric value
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_SEXT, dst, src));
+                masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(MASM_CONV_SEXT, 0), dst, src));
             }
             else
             {
                 // all other cases: zero-extend (bitcast semantics)
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_ZEXT, dst, src));
+                masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(MASM_CONV_ZEXT, 0), dst, src));
             }
         }
         else
@@ -1669,7 +1681,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
 
             MasmOperand res = isa_result(ctx, 8);
             MasmOperand src = masm_operand_label(label);
-            masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, res, src));
+            masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, res, src));
             return res;
         }
 
@@ -1724,7 +1736,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             // MOV result, label (absolute address)
             MasmOperand res = isa_result(ctx, 8);
             MasmOperand src = masm_operand_label(label);
-            masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, res, src));
+            masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, res, src));
 #ifdef MASM_DEBUG
             fprintf(stderr, "[lower_expr] string literal: emitted MOV, text section inst_count after=%zu\n", text->inst_count);
 #endif
@@ -1755,7 +1767,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             {
                 MasmOperand result = isa_result(ctx, 8);
                 MasmOperand addr   = frame_mem(ctx, var->offset, ctx->ptr_size);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, result, addr));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, result, addr));
                 return result;
             }
 
@@ -1803,7 +1815,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
 
                 MasmOperand addr     = isa_result(ctx, 8);
                 MasmOperand label_op = masm_operand_label(sym->name);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, addr, label_op));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, addr, label_op));
 
                 if (is_aggregate || sym->size > 8 || is_odd_size)
                 {
@@ -1941,7 +1953,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
                 {
                     MasmOperand dst  = isa_result(ctx, ctx->ptr_size);
                     MasmOperand addr = frame_mem(ctx, var->offset, ctx->ptr_size);
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, addr));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst, addr));
                     return dst;
                 }
 
@@ -1958,7 +1970,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
                 {
                     MasmOperand dst      = isa_result(ctx, ctx->ptr_size);
                     MasmOperand label_op = masm_operand_label(sym->name);
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, label_op));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst, label_op));
                     return dst;
                 }
                 if (inner_expr->symbol)
@@ -1969,7 +1981,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
                     {
                         MasmOperand dst      = isa_result(ctx, ctx->ptr_size);
                         MasmOperand label_op = masm_operand_label(link_name);
-                        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, label_op));
+                        masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst, label_op));
                         return dst;
                     }
                 }
@@ -1980,13 +1992,13 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             if (val.kind == MASM_OPERAND_MEMORY)
             {
                 MasmOperand dst = isa_result(ctx, ctx->ptr_size);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, val));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst, val));
                 return dst;
             }
             else if (val.kind == MASM_OPERAND_LABEL)
             {
                 MasmOperand dst = isa_result(ctx, ctx->ptr_size);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst, val));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst, val));
                 return dst;
             }
 
@@ -2149,7 +2161,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
                     }
                     else if (val.kind == MASM_OPERAND_MEMORY)
                     {
-                        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, val));
+                        masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, val));
                     }
                     else if (val.kind == MASM_OPERAND_LABEL || val.kind == MASM_OPERAND_IMM)
                     {
@@ -2164,7 +2176,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
 
                     MasmOperand dst_ptr  = isa_tmp(ctx, ctx->ptr_size);
                     MasmOperand dst_addr = frame_mem(ctx, elem_offset, ctx->ptr_size);
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst_ptr, dst_addr));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst_ptr, dst_addr));
 
                     emit_aggregate_copy(text, ctx, dst_ptr, src_ptr, (size_t)elem_size);
                 }
@@ -2211,11 +2223,11 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             MasmOperand ext_idx = alloc_vreg(ctx, ctx->ptr_size);
             if (type_is_signed(idx_type))
             {
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_SEXT, ext_idx, idx));
+                masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(MASM_CONV_SEXT, 0), ext_idx, idx));
             }
             else
             {
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_ZEXT, ext_idx, idx));
+                masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(MASM_CONV_ZEXT, 0), ext_idx, idx));
             }
             idx = ext_idx;
         }
@@ -2236,7 +2248,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             else
             {
                 // Array: get address of the array itself
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, arr_reg, arr));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, arr_reg, arr));
             }
             arr = arr_reg;
         }
@@ -2369,7 +2381,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
                     if (init_op.kind == MASM_OPERAND_MEMORY)
                     {
                         src_ptr = alloc_vreg(ctx, ctx->ptr_size);
-                        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, init_op));
+                        masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, init_op));
                     }
                     else
                     {
@@ -2379,7 +2391,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
 
                     MasmOperand dst_ptr  = alloc_vreg(ctx, ctx->ptr_size);
                     MasmOperand dst_addr = frame_mem(ctx, dest_disp, ctx->ptr_size);
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst_ptr, dst_addr));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst_ptr, dst_addr));
 
                     int chunk = 8;
                     for (size_t k = 0; k < fsize; k += chunk)
@@ -2453,7 +2465,7 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
                     if (src_val.kind == MASM_OPERAND_MEMORY)
                     {
                         src_ptr = alloc_vreg(ctx, ctx->ptr_size);
-                        masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, src_val));
+                        masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, src_val));
                     }
                     else
                     {
@@ -2712,11 +2724,11 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
                 }
                 else if (value.kind == MASM_OPERAND_MEMORY)
                 {
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, value));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, value));
                 }
                 else if (value.kind == MASM_OPERAND_LABEL)
                 {
-                    masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, src_ptr, value));
+                    masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, src_ptr, value));
                 }
                 else
                 {
@@ -2725,7 +2737,7 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
 
                 MasmOperand dst_ptr  = isa_tmp(ctx, ctx->ptr_size);
                 MasmOperand dst_addr = frame_mem(ctx, offset, ctx->ptr_size);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst_ptr, dst_addr));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst_ptr, dst_addr));
 
                 emit_aggregate_copy(text, ctx, dst_ptr, src_ptr, var_size);
             }
@@ -2837,7 +2849,7 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
         cond             = ensure_in_reg(text, cond, stmt->cond_stmt.cond->type, ctx);
 
         // jump to else/end if false (zero)
-        masm_section_append_inst(text, masm_inst_3(MASM_IR_BEQ, cond, masm_operand_imm(0), masm_operand_label(else_label)));
+        masm_section_append_inst(text, masm_inst_3m(MASM_IR_BRANCH, MASM_META(MASM_CC_EQ, 0), cond, masm_operand_imm(0), masm_operand_label(else_label)));
 
         // lower body
         lower_stmt(masm, text, stmt->cond_stmt.body, ctx);
@@ -2887,7 +2899,7 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
         {
             MasmOperand cond = lower_expr(masm, text, stmt->for_stmt.cond, ctx);
             cond             = ensure_in_reg(text, cond, stmt->for_stmt.cond->type, ctx);
-            masm_section_append_inst(text, masm_inst_3(MASM_IR_BEQ, cond, masm_operand_imm(0), masm_operand_label(ctx->loop_end_label)));
+            masm_section_append_inst(text, masm_inst_3m(MASM_IR_BRANCH, MASM_META(MASM_CC_EQ, 0), cond, masm_operand_imm(0), masm_operand_label(ctx->loop_end_label)));
         }
 
         // Body
@@ -2922,7 +2934,7 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
             MasmOperand cond = lower_expr(masm, text, stmt->cond_stmt.cond, ctx);
             cond             = ensure_in_reg(text, cond, stmt->cond_stmt.cond->type, ctx);
 
-            masm_section_append_inst(text, masm_inst_3(MASM_IR_BEQ, cond, masm_operand_imm(0), masm_operand_label(else_label)));
+            masm_section_append_inst(text, masm_inst_3m(MASM_IR_BRANCH, MASM_META(MASM_CC_EQ, 0), cond, masm_operand_imm(0), masm_operand_label(else_label)));
 
             lower_stmt(masm, text, stmt->cond_stmt.body, ctx);
 
@@ -2974,7 +2986,7 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
         {
             MasmOperand cond = lower_expr(masm, text, stmt->for_stmt.cond, ctx);
             cond             = ensure_in_reg(text, cond, stmt->for_stmt.cond->type, ctx);
-            masm_section_append_inst(text, masm_inst_3(MASM_IR_BEQ, cond, masm_operand_imm(0), masm_operand_label(end_label)));
+            masm_section_append_inst(text, masm_inst_3m(MASM_IR_BRANCH, MASM_META(MASM_CC_EQ, 0), cond, masm_operand_imm(0), masm_operand_label(end_label)));
         }
 
         // lower body
@@ -3022,13 +3034,56 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
     }
 }
 
+static uint8_t parse_mo_suffix(const char *s)
+{
+    if (strcmp(s, "relaxed") == 0) return MASM_MO_RELAXED;
+    if (strcmp(s, "acquire") == 0) return MASM_MO_ACQUIRE;
+    if (strcmp(s, "release") == 0) return MASM_MO_RELEASE;
+    if (strcmp(s, "acq_rel") == 0) return MASM_MO_ACQ_REL;
+    if (strcmp(s, "seq_cst") == 0) return MASM_MO_SEQ_CST;
+    return MASM_MO_SEQ_CST;
+}
+
+static uint8_t parse_rmw_suffix(const char *s)
+{
+    if (strcmp(s, "add") == 0)  return MASM_RMW_ADD;
+    if (strcmp(s, "sub") == 0)  return MASM_RMW_SUB;
+    if (strcmp(s, "and") == 0)  return MASM_RMW_AND;
+    if (strcmp(s, "or") == 0)   return MASM_RMW_OR;
+    if (strcmp(s, "xor") == 0)  return MASM_RMW_XOR;
+    if (strcmp(s, "xchg") == 0) return MASM_RMW_XCHG;
+    return MASM_RMW_ADD;
+}
+
+static int parse_comma_operands(const char *str, MasmOperand *ops, int max_ops, LowerContext *ctx)
+{
+    if (!str) return 0;
+    char *copy     = strdup(str);
+    char *saveptr  = NULL;
+    char *tok      = strtok_r(copy, ",", &saveptr);
+    int   count    = 0;
+
+    while (tok && count < max_ops)
+    {
+        while (*tok == ' ' || *tok == '\t') tok++;
+        size_t len = strlen(tok);
+        while (len > 0 && (tok[len - 1] == ' ' || tok[len - 1] == '\t'))
+            tok[--len] = '\0';
+        if (*tok != '\0')
+            ops[count++] = parse_operand(tok, ctx);
+        tok = strtok_r(NULL, ",", &saveptr);
+    }
+
+    free(copy);
+    return count;
+}
+
 static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content, LowerContext *ctx)
 {
     (void)masm;
 
-    // simple parser for inline masm blocks
-    // format: "opcode operand1, operand2"
-    // for now, support basic syscall pattern
+    // portable inline asm parser
+    // supports MASM IR mnemonics with dot-suffix variants
     char *line    = strdup(content);
     char *saveptr = NULL;
     char *token   = strtok_r(line, "\n;", &saveptr);
@@ -3198,7 +3253,7 @@ static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content
                 MasmOperand dst_op = parse_operand(dest, ctx);
                 MasmOperand src_op = parse_operand(src, ctx);
 
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst_op, src_op));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst_op, src_op));
             }
         }
         else if (strncmp(token, "and ", 4) == 0)
@@ -3223,30 +3278,6 @@ static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content
                 MasmOperand dst_op = parse_operand(dest, ctx);
                 MasmOperand src_op = parse_operand(src, ctx);
                 masm_section_append_inst(text, masm_inst_3(MASM_IR_AND, dst_op, dst_op, src_op));
-            }
-        }
-        else if (strncmp(token, "movzx ", 6) == 0)
-        {
-            char *operands = token + 6;
-            char *comma    = strchr(operands, ',');
-            if (comma)
-            {
-                *comma     = '\0';
-                char *dest = operands;
-                char *src  = comma + 1;
-
-                while (*dest == ' ')
-                {
-                    dest++;
-                }
-                while (*src == ' ')
-                {
-                    src++;
-                }
-
-                MasmOperand dst_op = parse_operand(dest, ctx);
-                MasmOperand src_op = parse_operand(src, ctx);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_MOV, dst_op, src_op));
             }
         }
         else if (strncmp(token, "mov ", 4) == 0)
@@ -3298,7 +3329,7 @@ static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content
 
                 MasmOperand dst_op = parse_operand(dest, ctx);
                 MasmOperand src_op = parse_operand(src, ctx);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_ZEXT, dst_op, src_op));
+                masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(MASM_CONV_ZEXT, 0), dst_op, src_op));
             }
         }
         else if (strncmp(token, "movsx ", 6) == 0)
@@ -3322,7 +3353,90 @@ static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content
 
                 MasmOperand dst_op = parse_operand(dest, ctx);
                 MasmOperand src_op = parse_operand(src, ctx);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_SEXT, dst_op, src_op));
+                masm_section_append_inst(text, masm_inst_2m(MASM_IR_CONV, MASM_META(MASM_CONV_SEXT, 0), dst_op, src_op));
+            }
+        }
+        else if (strcmp(token, "trap") == 0)
+        {
+            masm_section_append_inst(text, masm_inst_0(MASM_IR_TRAP));
+        }
+        else if (strncmp(token, "hint.", 5) == 0)
+        {
+            uint8_t kind = MASM_HINT_PAUSE;
+            if (strcmp(token + 5, "pause") != 0)
+                kind = MASM_HINT_PAUSE;
+            masm_section_append_inst(text, masm_inst_0m(MASM_IR_HINT, MASM_META(kind, 0)));
+        }
+        else if (strncmp(token, "fence", 5) == 0)
+        {
+            uint8_t mo = MASM_MO_SEQ_CST;
+            if (token[5] == '.')
+                mo = parse_mo_suffix(token + 6);
+            masm_section_append_inst(text, masm_inst_0m(MASM_IR_FENCE, MASM_META(mo, 0)));
+        }
+        else if (strncmp(token, "atomic.", 7) == 0)
+        {
+            char *space = strchr(token, ' ');
+            char  mnemonic[64];
+
+            if (space)
+            {
+                size_t mlen = (size_t)(space - token);
+                if (mlen >= sizeof(mnemonic)) mlen = sizeof(mnemonic) - 1;
+                memcpy(mnemonic, token, mlen);
+                mnemonic[mlen] = '\0';
+            }
+            else
+            {
+                strncpy(mnemonic, token, sizeof(mnemonic) - 1);
+                mnemonic[sizeof(mnemonic) - 1] = '\0';
+            }
+
+            const char *operand_str = space ? space + 1 : NULL;
+
+            if (strncmp(mnemonic, "atomic.load.", 12) == 0)
+            {
+                uint8_t     mo = parse_mo_suffix(mnemonic + 12);
+                MasmOperand ops[2];
+                int         count = parse_comma_operands(operand_str, ops, 2, ctx);
+                if (count == 2)
+                    masm_section_append_inst(text, masm_inst_2m(MASM_IR_ATOMIC_LOAD, MASM_META(mo, 0), ops[0], ops[1]));
+            }
+            else if (strncmp(mnemonic, "atomic.store.", 13) == 0)
+            {
+                uint8_t     mo = parse_mo_suffix(mnemonic + 13);
+                MasmOperand ops[2];
+                int         count = parse_comma_operands(operand_str, ops, 2, ctx);
+                if (count == 2)
+                    masm_section_append_inst(text, masm_inst_2m(MASM_IR_ATOMIC_STORE, MASM_META(mo, 0), ops[0], ops[1]));
+            }
+            else if (strncmp(mnemonic, "atomic.cas.", 11) == 0)
+            {
+                uint8_t     mo = parse_mo_suffix(mnemonic + 11);
+                MasmOperand ops[4];
+                int         count = parse_comma_operands(operand_str, ops, 4, ctx);
+                if (count == 4)
+                    masm_section_append_inst(text, masm_inst_4m(MASM_IR_ATOMIC_CAS, MASM_META(mo, 0), ops[0], ops[1], ops[2], ops[3]));
+            }
+            else if (strncmp(mnemonic, "atomic.rmw.", 11) == 0)
+            {
+                const char *rest = mnemonic + 11;
+                const char *dot  = strchr(rest, '.');
+                if (dot)
+                {
+                    char kind_str[16];
+                    size_t klen = (size_t)(dot - rest);
+                    if (klen >= sizeof(kind_str)) klen = sizeof(kind_str) - 1;
+                    memcpy(kind_str, rest, klen);
+                    kind_str[klen] = '\0';
+
+                    uint8_t     rmw_kind = parse_rmw_suffix(kind_str);
+                    uint8_t     mo       = parse_mo_suffix(dot + 1);
+                    MasmOperand ops[3];
+                    int         count = parse_comma_operands(operand_str, ops, 3, ctx);
+                    if (count == 3)
+                        masm_section_append_inst(text, masm_inst_3m(MASM_IR_ATOMIC_RMW, MASM_RMW_META(mo, rmw_kind), ops[0], ops[1], ops[2]));
+                }
             }
         }
 
@@ -3715,7 +3829,7 @@ static void lower_function(Masm *masm, AstNode *func_node, SymbolTable *symbols,
 
                 MasmOperand dst_ptr  = alloc_vreg(ctx, ctx->ptr_size);
                 MasmOperand dst_addr = frame_mem(ctx, offset, ctx->ptr_size);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_LEA, dst_ptr, dst_addr));
+                masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, dst_ptr, dst_addr));
 
                 int32_t chunk = 8;
                 for (int32_t off = 0; off < (int32_t)param_size; off += chunk)

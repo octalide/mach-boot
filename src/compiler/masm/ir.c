@@ -10,6 +10,7 @@ MasmInstruction masm_inst_create(MasmOpcodeKind kind, uint32_t opcode, MasmOpera
     inst.kind = kind;
     inst.opcode = opcode;
     inst.operand_count = count;
+    inst.meta = 0;
 
     if (count > 0)
     {
@@ -65,6 +66,43 @@ MasmInstruction masm_inst_4(uint32_t opcode, MasmOperand op1, MasmOperand op2, M
 {
     MasmOperand ops[] = {op1, op2, op3, op4};
     return masm_inst_create(MASM_OPCODE_IR, opcode, ops, 4);
+}
+
+// builders with meta byte
+
+MasmInstruction masm_inst_0m(uint32_t opcode, uint8_t meta)
+{
+    MasmInstruction inst = masm_inst_0(opcode);
+    inst.meta = meta;
+    return inst;
+}
+
+MasmInstruction masm_inst_1m(uint32_t opcode, uint8_t meta, MasmOperand op1)
+{
+    MasmInstruction inst = masm_inst_1(opcode, op1);
+    inst.meta = meta;
+    return inst;
+}
+
+MasmInstruction masm_inst_2m(uint32_t opcode, uint8_t meta, MasmOperand op1, MasmOperand op2)
+{
+    MasmInstruction inst = masm_inst_2(opcode, op1, op2);
+    inst.meta = meta;
+    return inst;
+}
+
+MasmInstruction masm_inst_3m(uint32_t opcode, uint8_t meta, MasmOperand op1, MasmOperand op2, MasmOperand op3)
+{
+    MasmInstruction inst = masm_inst_3(opcode, op1, op2, op3);
+    inst.meta = meta;
+    return inst;
+}
+
+MasmInstruction masm_inst_4m(uint32_t opcode, uint8_t meta, MasmOperand op1, MasmOperand op2, MasmOperand op3, MasmOperand op4)
+{
+    MasmInstruction inst = masm_inst_4(opcode, op1, op2, op3, op4);
+    inst.meta = meta;
+    return inst;
 }
 
 // target-specific instruction builders
@@ -134,14 +172,10 @@ const char *masm_ir_name(MasmIrOpcode op)
         return "load";
     case MASM_IR_STORE:
         return "store";
-    case MASM_IR_LEA:
-        return "lea";
-    case MASM_IR_ZEXT:
-        return "zext";
-    case MASM_IR_SEXT:
-        return "sext";
+    case MASM_IR_ADDR:
+        return "addr";
 
-    // integer arithmetic
+    // arithmetic
     case MASM_IR_ADD:
         return "add";
     case MASM_IR_SUB:
@@ -150,96 +184,72 @@ const char *masm_ir_name(MasmIrOpcode op)
         return "mul";
     case MASM_IR_DIV:
         return "div";
-    case MASM_IR_DIVU:
-        return "divu";
-    case MASM_IR_REM:
-        return "rem";
-    case MASM_IR_REMU:
-        return "remu";
-    case MASM_IR_NEG:
-        return "neg";
 
-    // bitwise operations
+    // bitwise
     case MASM_IR_AND:
         return "and";
     case MASM_IR_OR:
         return "or";
     case MASM_IR_XOR:
         return "xor";
-    case MASM_IR_NOT:
-        return "not";
     case MASM_IR_SHL:
         return "shl";
     case MASM_IR_SHR:
         return "shr";
-    case MASM_IR_SAR:
-        return "sar";
 
-    // comparisons (set-if)
-    case MASM_IR_SEQ:
-        return "seq";
-    case MASM_IR_SNE:
-        return "sne";
-    case MASM_IR_SLT:
-        return "slt";
-    case MASM_IR_SLTU:
-        return "sltu";
-    case MASM_IR_SLE:
-        return "sle";
-    case MASM_IR_SLEU:
-        return "sleu";
-    case MASM_IR_SGT:
-        return "sgt";
-    case MASM_IR_SGTU:
-        return "sgtu";
-    case MASM_IR_SGE:
-        return "sge";
-    case MASM_IR_SGEU:
-        return "sgeu";
-
-    // floating point
-    case MASM_IR_FADD:
-        return "fadd";
-    case MASM_IR_FSUB:
-        return "fsub";
-    case MASM_IR_FMUL:
-        return "fmul";
-    case MASM_IR_FDIV:
-        return "fdiv";
-    case MASM_IR_FCMP:
-        return "fcmp";
-    case MASM_IR_FCONV:
-        return "fconv";
+    // comparison
+    case MASM_IR_CMP:
+        return "cmp";
 
     // control flow
     case MASM_IR_JMP:
         return "jmp";
-    case MASM_IR_BEQ:
-        return "beq";
-    case MASM_IR_BNE:
-        return "bne";
-    case MASM_IR_BLT:
-        return "blt";
-    case MASM_IR_BLTU:
-        return "bltu";
-    case MASM_IR_BGE:
-        return "bge";
-    case MASM_IR_BGEU:
-        return "bgeu";
+    case MASM_IR_BRANCH:
+        return "branch";
     case MASM_IR_CALL:
         return "call";
     case MASM_IR_RET:
         return "ret";
 
-    // system
+    // type conversion
+    case MASM_IR_CONV:
+        return "conv";
+
+    // pseudo/system
+    case MASM_IR_LABEL:
+        return "label";
     case MASM_IR_SYSCALL:
         return "syscall";
 
-    // pseudo-ops
-    case MASM_IR_LABEL:
-        return "label";
-    case MASM_IR_DATA:
-        return "data";
+    // ABI
+    case MASM_IR_ARG:
+        return "arg";
+    case MASM_IR_PARAM:
+        return "param";
+
+    // atomics
+    case MASM_IR_ATOMIC_LOAD:
+        return "atomic.load";
+    case MASM_IR_ATOMIC_STORE:
+        return "atomic.store";
+    case MASM_IR_ATOMIC_CAS:
+        return "atomic.cas";
+    case MASM_IR_ATOMIC_RMW:
+        return "atomic.rmw";
+    case MASM_IR_FENCE:
+        return "fence";
+
+    // trap and hints
+    case MASM_IR_TRAP:
+        return "trap";
+    case MASM_IR_HINT:
+        return "hint";
+
+    // internal pseudo-ops (mach-boot only)
+    case MASM_IR_NEG:
+        return "neg";
+    case MASM_IR_NOT:
+        return "not";
     case MASM_IR_STACK_FRAME:
         return "stack_frame";
 
