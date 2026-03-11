@@ -3280,30 +3280,6 @@ static void lower_inline_masm(Masm *masm, MasmSection *text, const char *content
                 masm_section_append_inst(text, masm_inst_3(MASM_IR_AND, dst_op, dst_op, src_op));
             }
         }
-        else if (strncmp(token, "movzx ", 6) == 0)
-        {
-            char *operands = token + 6;
-            char *comma    = strchr(operands, ',');
-            if (comma)
-            {
-                *comma     = '\0';
-                char *dest = operands;
-                char *src  = comma + 1;
-
-                while (*dest == ' ')
-                {
-                    dest++;
-                }
-                while (*src == ' ')
-                {
-                    src++;
-                }
-
-                MasmOperand dst_op = parse_operand(dest, ctx);
-                MasmOperand src_op = parse_operand(src, ctx);
-                masm_section_append_inst(text, masm_inst_2(MASM_IR_MOV, dst_op, src_op));
-            }
-        }
         else if (strncmp(token, "mov ", 4) == 0)
         {
             // parse mov instruction: "mov rax, 60"
