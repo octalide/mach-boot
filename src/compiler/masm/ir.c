@@ -98,6 +98,13 @@ MasmInstruction masm_inst_3m(uint32_t opcode, uint8_t meta, MasmOperand op1, Mas
     return inst;
 }
 
+MasmInstruction masm_inst_4m(uint32_t opcode, uint8_t meta, MasmOperand op1, MasmOperand op2, MasmOperand op3, MasmOperand op4)
+{
+    MasmInstruction inst = masm_inst_4(opcode, op1, op2, op3, op4);
+    inst.meta = meta;
+    return inst;
+}
+
 // target-specific instruction builders
 
 MasmInstruction masm_inst_target_create(MasmOpcodeKind kind, uint32_t opcode, MasmOperand *operands, uint8_t count)
