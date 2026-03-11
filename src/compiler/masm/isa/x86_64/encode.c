@@ -796,16 +796,32 @@ int masm_x86_encode(MasmInstruction inst, uint8_t *buffer, size_t size)
     case MASM_OP_X86_NEG_M:
     case MASM_OP_X86_NOT_R:
     case MASM_OP_X86_NOT_M:
+    case MASM_OP_X86_INC_R:
+    case MASM_OP_X86_INC_M:
+    case MASM_OP_X86_DEC_R:
+    case MASM_OP_X86_DEC_M:
         if (inst.operand_count == 1)
         {
             uint8_t subopcode = 0;
+            bool    use_fe    = false;
+
             if (inst.opcode == MASM_OP_X86_NOT_R || inst.opcode == MASM_OP_X86_NOT_M)
             {
                 subopcode = 2;
             }
+            else if (inst.opcode == MASM_OP_X86_NEG_R || inst.opcode == MASM_OP_X86_NEG_M)
+            {
+                subopcode = 3;
+            }
+            else if (inst.opcode == MASM_OP_X86_INC_R || inst.opcode == MASM_OP_X86_INC_M)
+            {
+                subopcode = 0;
+                use_fe    = true;
+            }
             else
             {
-                subopcode = 3; // NEG
+                subopcode = 1; // DEC
+                use_fe    = true;
             }
 
             bool    is_reg = (inst.operands[0].kind == MASM_OPERAND_REGISTER);
@@ -818,7 +834,7 @@ int masm_x86_encode(MasmInstruction inst, uint8_t *buffer, size_t size)
             {
                 emit_byte(buffer, &offset, size, 0x66);
             }
-            uint8_t opcode = byte ? 0xF6 : 0xF7;
+            uint8_t opcode = use_fe ? (byte ? 0xFE : 0xFF) : (byte ? 0xF6 : 0xF7);
 
             if (is_reg)
             {
