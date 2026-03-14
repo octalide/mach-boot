@@ -2529,15 +2529,13 @@ static int sema_load_module(Sema *sema, const char *module_path, SemaModule **ou
     AstNode *ast = parser_parse_program(&parser);
     if (!ast || parser.had_error)
     {
-        // capture parse errors into sema error list
-        char errmsg[512];
-        snprintf(errmsg, sizeof(errmsg), "parse error in '%s'", module_path);
-        sema_error_list_add(sema, NULL, errmsg);
-        sema->error_count++;
+        // print parser errors with source context
+        parser_error_list_print(&parser.errors, &lexer, file_path);
         parser_dnit(&parser);
         lexer_dnit(&lexer);
         free(source);
         free(file_path);
+        sema->error_count++;
         return -3; // parse errors
     }
 
