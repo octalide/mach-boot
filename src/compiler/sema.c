@@ -2492,7 +2492,7 @@ static int sema_load_module(Sema *sema, const char *module_path, SemaModule **ou
     char *file_path = sema_resolve_module_path(sema, module_path);
     if (!file_path)
     {
-        return -1;
+        return -2; // path resolution failed
     }
 
     // read file
@@ -2500,7 +2500,7 @@ static int sema_load_module(Sema *sema, const char *module_path, SemaModule **ou
     if (!f)
     {
         free(file_path);
-        return -1;
+        return -2; // file not found
     }
 
     fseek(f, 0, SEEK_END);
@@ -2529,11 +2529,16 @@ static int sema_load_module(Sema *sema, const char *module_path, SemaModule **ou
     AstNode *ast = parser_parse_program(&parser);
     if (!ast || parser.had_error)
     {
+        // capture parse errors into sema error list
+        char errmsg[512];
+        snprintf(errmsg, sizeof(errmsg), "parse error in '%s'", module_path);
+        sema_error_list_add(sema, NULL, errmsg);
+        sema->error_count++;
         parser_dnit(&parser);
         lexer_dnit(&lexer);
         free(source);
         free(file_path);
-        return -1;
+        return -3; // parse errors
     }
 
     // create and cache module (keep source for error reporting)
@@ -2608,7 +2613,7 @@ static int sema_load_module(Sema *sema, const char *module_path, SemaModule **ou
         {
             if (sema_analyze_stmt(sema, ast->program.stmts->items[i]) < 0)
             {
-                result = -1;
+                result = -3; // sema errors in module
                 // continue to find more errors
             }
         }
@@ -2656,11 +2661,25 @@ static int sema_analyze_use(Sema *sema, AstNode *node)
 
     // load and analyze the module
     SemaModule *module = NULL;
-    if (sema_load_module(sema, module_path, &module) < 0)
+    int load_result = sema_load_module(sema, module_path, &module);
+    if (load_result < 0)
     {
         char errmsg[512];
-        snprintf(errmsg, sizeof(errmsg), "failed to load module '%s'", module_path);
-        sema_error(sema, node->token, errmsg);
+        if (load_result == -2)
+        {
+            snprintf(errmsg, sizeof(errmsg), "module not found: '%s'", module_path);
+            sema_error(sema, node->token, errmsg);
+        }
+        else if (load_result == -3)
+        {
+            snprintf(errmsg, sizeof(errmsg), "errors in imported module '%s'", module_path);
+            sema_error(sema, node->token, errmsg);
+        }
+        else
+        {
+            snprintf(errmsg, sizeof(errmsg), "failed to load module '%s'", module_path);
+            sema_error(sema, node->token, errmsg);
+        }
         return -1;
     }
 
