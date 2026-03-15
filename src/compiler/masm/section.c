@@ -1,7 +1,6 @@
 #include "compiler/masm/section.h"
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 
 MasmSection *masm_section_create(MasmSectionKind kind, const char *name)
@@ -56,7 +55,7 @@ void masm_section_append_inst(MasmSection *section, MasmInstruction inst)
         section->instructions = realloc(section->instructions, sizeof(MasmInstruction) * new_capacity);
         section->inst_capacity = new_capacity;
     }
-    
+
     section->instructions[section->inst_count++] = inst;
 }
 
