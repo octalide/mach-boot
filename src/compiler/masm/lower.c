@@ -3970,12 +3970,28 @@ Masm *masm_lower_module(AstNode *ast, SymbolTable *symbols)
 
         // pass 1: lower global vars/vals first so their symbols exist when lowering functions.
         // functions may reference globals (e.g. `true`/`false`) and need `masm_get_symbol()` to succeed.
+        // also recurse into $if taken branches to find nested val/var declarations.
         for (int i = 0; i < stmts->count; i++)
         {
             AstNode *decl = stmts->items[i];
             if (decl->kind == AST_STMT_VAR || decl->kind == AST_STMT_VAL)
             {
                 lower_global_var(masm, decl, &counters);
+            }
+            else if (decl->kind == AST_STMT_COMPTIME_IF || decl->kind == AST_STMT_COMPTIME_OR)
+            {
+                AstNode *branch = decl->comptime_if_stmt.taken_branch;
+                if (branch && branch->kind == AST_STMT_BLOCK && branch->block_stmt.stmts)
+                {
+                    for (int j = 0; j < branch->block_stmt.stmts->count; j++)
+                    {
+                        AstNode *inner = branch->block_stmt.stmts->items[j];
+                        if (inner->kind == AST_STMT_VAR || inner->kind == AST_STMT_VAL)
+                        {
+                            lower_global_var(masm, inner, &counters);
+                        }
+                    }
+                }
             }
         }
 
