@@ -916,8 +916,8 @@ static void emit_float_cmp(MasmSection *sec, CodeGenContext *ctx, MasmInstructio
         setcc_op = MASM_OP_X86_SETAE;
         break;
     default:
-        setcc_op = MASM_OP_X86_SETE;
-        break;
+        fprintf(stderr, "isel: unknown float cmp condition %d\n", cond);
+        abort();
     }
 
     // SetCC -> AL
@@ -1916,7 +1916,9 @@ static void x86_64_codegen(Masm *masm)
                         case MASM_CC_UGT: setcc_op = MASM_OP_X86_SETA;  break;
                         case MASM_CC_ULE: setcc_op = MASM_OP_X86_SETBE; break;
                         case MASM_CC_UGE: setcc_op = MASM_OP_X86_SETAE; break;
-                        default:          setcc_op = MASM_OP_X86_SETE;  break;
+                        default:
+                            fprintf(stderr, "isel: unknown cmp condition cc=%d meta=0x%02x\n", cc, inst->meta);
+                            abort();
                         }
                         emit_setcc(out, &ctx, inst, setcc_op);
                     }
@@ -1975,15 +1977,21 @@ static void x86_64_codegen(Masm *masm)
                 }
 
                 default:
+                {
                     // Unknown IR opcode - preserve as-is
-                    masm_section_append_inst(out, masm_inst_create(inst->kind, inst->opcode, inst->operands, inst->operand_count));
+                    MasmInstruction copy = masm_inst_create(inst->kind, inst->opcode, inst->operands, inst->operand_count);
+                    copy.meta = inst->meta;
+                    masm_section_append_inst(out, copy);
                     break;
+                }
                 }
             }
             else
             {
                 // Non-IR instruction (e.g. from inline assembly) - preserve as-is
-                masm_section_append_inst(out, masm_inst_create(inst->kind, inst->opcode, inst->operands, inst->operand_count));
+                MasmInstruction copy = masm_inst_create(inst->kind, inst->opcode, inst->operands, inst->operand_count);
+                copy.meta = inst->meta;
+                masm_section_append_inst(out, copy);
             }
         }
 

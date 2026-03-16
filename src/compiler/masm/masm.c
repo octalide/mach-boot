@@ -153,6 +153,7 @@ void masm_merge(Masm *dest, Masm *src)
             MasmInstruction *src_inst = &src_sec->instructions[j];
             // Create a copy of the instruction (allocates new operand array)
             MasmInstruction new_inst = masm_inst_create(src_inst->kind, src_inst->opcode, src_inst->operands, src_inst->operand_count);
+            new_inst.meta = src_inst->meta;
             masm_section_append_inst(dest_sec, new_inst);
         }
 #ifdef MASM_DEBUG
