@@ -3146,8 +3146,6 @@ AstNode *parser_parse_type(Parser *parser)
         {
             return NULL;
         }
-        outer->type_ptr.is_read_only = true;
-
         AstNode *inner = parser_alloc_node(parser, AST_TYPE_PTR, parser->previous);
         if (!inner)
         {
@@ -3155,7 +3153,6 @@ AstNode *parser_parse_type(Parser *parser)
             free(outer);
             return NULL;
         }
-        inner->type_ptr.is_read_only = true;
 
         outer->type_ptr.base = inner;
         inner->type_ptr.base = parser_parse_type(parser);
@@ -3242,8 +3239,6 @@ AstNode *parser_parse_type_ptr(Parser *parser)
     {
         return NULL;
     }
-
-    ptr->type_ptr.is_read_only = (parser->previous->kind == TOKEN_AMPERSAND);
 
     ptr->type_ptr.base = parser_parse_type(parser);
     if (!ptr->type_ptr.base)

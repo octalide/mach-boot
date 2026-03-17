@@ -897,7 +897,7 @@ static bool sema_expr_is_mutable_lvalue(Sema *sema, AstNode *node)
         if (node->unary_expr.op == TOKEN_AT)
         {
             Type *t = node->unary_expr.expr ? node->unary_expr.expr->type : NULL;
-            return t && t->kind == TYPE_POINTER && !t->pointer.is_const;
+            return t && t->kind == TYPE_POINTER;
         }
         return false;
 
@@ -911,7 +911,7 @@ static bool sema_expr_is_mutable_lvalue(Sema *sema, AstNode *node)
 
         if (obj_type->kind == TYPE_POINTER)
         {
-            return !obj_type->pointer.is_const;
+            return true;
         }
 
         return sema_expr_is_mutable_lvalue(sema, node->field_expr.object);
@@ -927,7 +927,7 @@ static bool sema_expr_is_mutable_lvalue(Sema *sema, AstNode *node)
 
         if (arr_type->kind == TYPE_POINTER)
         {
-            return !arr_type->pointer.is_const;
+            return true;
         }
 
         if (arr_type->kind == TYPE_ARRAY)
@@ -3019,7 +3019,7 @@ int sema_analyze_expr(Sema *sema, AstNode *node)
                 break;
             case TOKEN_LIT_STRING:
                 // simplified: string is pointer to u8
-                node->type = type_create_pointer(type_get_primitive(TYPE_U8), false);
+                node->type = type_create_pointer(type_get_primitive(TYPE_U8));
                 break;
             default:
                 break;
@@ -3191,7 +3191,7 @@ int sema_analyze_expr(Sema *sema, AstNode *node)
         if (node->unary_expr.op == TOKEN_QUESTION)
         {
             // address-of: ?expr
-            // operand must be an lvalue. result is *T for mutable lvalues, &T for immutable lvalues.
+            // operand must be an lvalue. result is *T.
             AstNode *operand = node->unary_expr.expr;
             if (!sema_expr_is_lvalue(sema, operand))
             {
@@ -3199,8 +3199,7 @@ int sema_analyze_expr(Sema *sema, AstNode *node)
                 return -1;
             }
 
-            bool is_const = !sema_expr_is_mutable_lvalue(sema, operand);
-            node->type    = type_create_pointer(operand->type, is_const);
+            node->type = type_create_pointer(operand->type);
         }
         else if (node->unary_expr.op == TOKEN_AT)
         {
@@ -3272,7 +3271,7 @@ int sema_analyze_expr(Sema *sema, AstNode *node)
                     return -1;
                 }
 
-                if (!ap_type || ap_type->kind != TYPE_POINTER || ap_type->pointer.is_const || !type_equals(ap_type->pointer.base, va_list))
+                if (!ap_type || ap_type->kind != TYPE_POINTER || !type_equals(ap_type->pointer.base, va_list))
                 {
                     sema_error(sema, node->token, "va_* builtins require a mutable pointer to va_list");
                     return -1;
@@ -3679,16 +3678,6 @@ int sema_analyze_expr(Sema *sema, AstNode *node)
         {
             sema_error(sema, node->token, "cast requires sized types");
             return -1;
-        }
-
-        // forbid dropping constness: &T -> *U (cast-away-const)
-        if (from_type->kind == TYPE_POINTER && target_type->kind == TYPE_POINTER)
-        {
-            if (from_type->pointer.is_const && !target_type->pointer.is_const)
-            {
-                sema_error(sema, node->token, "cannot cast readonly pointer to mutable pointer");
-                return -1;
-            }
         }
 
         node->type = target_type;
@@ -4224,7 +4213,7 @@ static Type *sema_resolve_type(Sema *sema, AstNode *type_node)
         {
             return NULL;
         }
-        return type_create_pointer(base, type_node->type_ptr.is_read_only);
+        return type_create_pointer(base);
     }
 
     case AST_TYPE_ARRAY:

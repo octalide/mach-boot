@@ -123,15 +123,14 @@ static AstNode *make_type_name(const char *name)
     return node;
 }
 
-static AstNode *make_ptr_type(AstNode *base, bool is_read_only)
+static AstNode *make_ptr_type(AstNode *base)
 {
     AstNode *node = make_node(AST_TYPE_PTR);
     if (!node)
     {
         return NULL;
     }
-    node->type_ptr.base         = base;
-    node->type_ptr.is_read_only = is_read_only;
+    node->type_ptr.base = base;
     return node;
 }
 
@@ -391,7 +390,7 @@ static AstNode *build_test_main_fn_portable(const char *test_fn_name)
     // note: we ignore argc/argv but need them for std.runtime compatibility
     AstList *params    = make_list();
     AstNode *argc_type = make_type_name("i64");
-    AstNode *argv_type = make_ptr_type(make_ptr_type(make_type_name("u8"), false), false);
+    AstNode *argv_type = make_ptr_type(make_ptr_type(make_type_name("u8")));
     ast_list_append(params, make_param("argc", argc_type));
     ast_list_append(params, make_param("argv", argv_type));
 

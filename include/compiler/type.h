@@ -50,7 +50,6 @@ struct Type
         struct
         {
             Type *base;
-            bool  is_const; // for & (read-only) vs * (mutable)
         } pointer;
 
         // TYPE_ARRAY
@@ -102,7 +101,7 @@ struct Type
 Type *type_get_primitive(TypeKind kind);
 
 // construct compound types
-Type *type_create_pointer(Type *base, bool is_const);
+Type *type_create_pointer(Type *base);
 Type *type_create_array(Type *elem_type, size_t count);
 Type *type_create_function(Type *return_type, Type **param_types, int param_count);
 Type *type_create_struct(const char *name, TypeField *fields, int field_count);

@@ -44,7 +44,7 @@ Type *type_get_primitive(TypeKind kind)
     return NULL;
 }
 
-Type *type_create_pointer(Type *base, bool is_const)
+Type *type_create_pointer(Type *base)
 {
     Type *type = malloc(sizeof(Type));
     if (!type)
@@ -52,11 +52,10 @@ Type *type_create_pointer(Type *base, bool is_const)
         return NULL;
     }
 
-    type->kind             = TYPE_POINTER;
-    type->size             = 8;
-    type->alignment        = 8;
-    type->pointer.base     = base;
-    type->pointer.is_const = is_const;
+    type->kind         = TYPE_POINTER;
+    type->size         = 8;
+    type->alignment    = 8;
+    type->pointer.base = base;
 
     return type;
 }
@@ -214,7 +213,7 @@ bool type_equals(Type *a, Type *b)
         return true; // primitives are equal if kinds match
 
     case TYPE_POINTER:
-        return type_equals(a->pointer.base, b->pointer.base) && a->pointer.is_const == b->pointer.is_const;
+        return type_equals(a->pointer.base, b->pointer.base);
 
     case TYPE_ARRAY:
         return a->array.count == b->array.count && type_equals(a->array.elem_type, b->array.elem_type);
@@ -296,20 +295,6 @@ bool type_can_assign_to(Type *from, Type *to)
     if (type_equals(from, to))
     {
         return true;
-    }
-
-    // *T -> &T: mutable pointer can be assigned to readonly pointer
-    if (from->kind == TYPE_POINTER && to->kind == TYPE_POINTER)
-    {
-        // check base types match
-        if (type_equals(from->pointer.base, to->pointer.base))
-        {
-            // *T -> &T is allowed (mutable to readonly)
-            if (!from->pointer.is_const && to->pointer.is_const)
-            {
-                return true;
-            }
-        }
     }
 
     // untyped pointer TYPE_PTR can be assigned to any typed pointer
@@ -418,7 +403,7 @@ bool type_is_numeric(Type *t)
 
 // mangle a type into Itanium-style encoding
 // primitives: length-prefixed name (e.g., "3i64", "2u8")
-// pointers: P<type> for mutable, K<type> for const/readonly
+// pointers: P<type>
 // arrays: A<count>_<elem_type>
 // records/unions: length-prefixed name, with I...E for generic args
 // returns number of chars written (not including null terminator)
@@ -470,9 +455,7 @@ int type_mangle(Type *type, char *buffer, size_t buffer_size)
 
     case TYPE_POINTER:
     {
-        // use 'P' for mutable pointers and 'K' for const/readonly pointers
-        char prefix = type->pointer.is_const ? 'K' : 'P';
-        written     = snprintf(buffer, buffer_size, "%c", prefix);
+        written = snprintf(buffer, buffer_size, "P");
         if (written < (int)buffer_size && type->pointer.base)
         {
             written += type_mangle(type->pointer.base, buffer + written, buffer_size - written);

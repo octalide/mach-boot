@@ -828,8 +828,7 @@ static AstNode *ast_clone_checked(const AstNode *node)
         break;
 
     case AST_TYPE_PTR:
-        clone->type_ptr.base         = ast_clone_checked(node->type_ptr.base);
-        clone->type_ptr.is_read_only = node->type_ptr.is_read_only;
+        clone->type_ptr.base = ast_clone_checked(node->type_ptr.base);
         break;
 
     case AST_TYPE_ARRAY:
@@ -1292,7 +1291,7 @@ void ast_print(AstNode *node, int indent)
         break;
 
     case AST_TYPE_PTR:
-        printf("TYPE_PTR%s\n", node->type_ptr.is_read_only ? " (read-only)" : "");
+        printf("TYPE_PTR\n");
         ast_print(node->type_ptr.base, indent + 1);
         break;
 
@@ -1838,7 +1837,7 @@ static void ast_print_to_file(AstNode *node, FILE *file, int indent)
         }
         break;
     case AST_TYPE_PTR:
-        fprintf(file, "TYPE_PTR%s\n", node->type_ptr.is_read_only ? " (read-only)" : "");
+        fprintf(file, "TYPE_PTR\n");
         ast_print_to_file(node->type_ptr.base, file, indent + 1);
         break;
     case AST_TYPE_ARRAY:

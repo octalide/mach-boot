@@ -361,7 +361,6 @@ struct AstNode
         struct
         {
             AstNode *base;
-            bool     is_read_only;
         } type_ptr;
 
         struct
