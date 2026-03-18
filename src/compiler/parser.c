@@ -2093,6 +2093,58 @@ static char *parser_extract_brace_content(Parser *parser)
     return content;
 }
 
+static void parser_skip_asm_spec(Parser *parser)
+{
+    if (!parser_consume(parser, TOKEN_L_PAREN, "expected '(' for asm spec"))
+        return;
+
+    while (!parser_check(parser, TOKEN_R_PAREN) && !parser_is_at_end(parser))
+    {
+        if (parser_check(parser, TOKEN_IDENTIFIER))
+        {
+            char *kw = lexer_raw_value(parser->lexer, parser->current);
+            bool is_in  = strcmp(kw, "in") == 0;
+            bool is_out = strcmp(kw, "out") == 0;
+            bool is_clb = strcmp(kw, "clb") == 0;
+            free(kw);
+
+            if (is_clb)
+            {
+                parser_advance(parser); // 'clb'
+                parser_advance(parser); // register name
+            }
+            else if (is_in)
+            {
+                parser_advance(parser); // 'in'
+                parser_advance(parser); // register name
+                parser_consume(parser, TOKEN_EQUAL, "expected '=' in asm spec");
+                AstNode *expr = parser_parse_expr(parser);
+                if (expr) { ast_node_dnit(expr); free(expr); }
+            }
+            else if (is_out)
+            {
+                parser_advance(parser); // 'out'
+                parser_advance(parser); // binding name
+                parser_consume(parser, TOKEN_EQUAL, "expected '=' in asm spec");
+                parser_advance(parser); // register name
+            }
+            else
+            {
+                parser_advance(parser);
+            }
+        }
+        else
+        {
+            parser_advance(parser);
+        }
+
+        if (parser_check(parser, TOKEN_COMMA))
+            parser_advance(parser);
+    }
+
+    parser_consume(parser, TOKEN_R_PAREN, "expected ')' after asm spec");
+}
+
 AstNode *parser_parse_stmt_mir(Parser *parser)
 {
     if (!parser_consume(parser, TOKEN_KW_ASM, "expected 'asm' keyword"))
@@ -2110,6 +2162,51 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
     node->masm_stmt.isa_name    = NULL;
     node->masm_stmt.isa_content = NULL;
 
+    // new syntax: asm <isa_name> [(<spec>)] { ... }
+    if (parser_check(parser, TOKEN_IDENTIFIER))
+    {
+        char *ident = lexer_raw_value(parser->lexer, parser->current);
+        if (parser_is_isa_name(ident))
+        {
+            node->masm_stmt.isa_name = ident;
+            parser_advance(parser);
+
+            if (parser_check(parser, TOKEN_L_PAREN))
+            {
+                parser_skip_asm_spec(parser);
+            }
+
+            if (!parser_consume(parser, TOKEN_L_BRACE, "expected '{' after asm"))
+            {
+                ast_node_dnit(node);
+                free(node);
+                return NULL;
+            }
+
+            node->masm_stmt.isa_content = parser_extract_brace_content(parser);
+            if (!node->masm_stmt.isa_content)
+            {
+                ast_node_dnit(node);
+                free(node);
+                return NULL;
+            }
+
+            if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after asm block"))
+            {
+                ast_node_dnit(node);
+                free(node);
+                return NULL;
+            }
+
+            return node;
+        }
+        else
+        {
+            free(ident);
+        }
+    }
+
+    // portable asm: asm { ... }
     if (!parser_consume(parser, TOKEN_L_BRACE, "expected '{' after 'asm'"))
     {
         ast_node_dnit(node);
@@ -2117,14 +2214,12 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
         return NULL;
     }
 
-    // check for ISA-specific block: identifier followed by '{'
-    // e.g., masm { x86_64 { ... } }
+    // old syntax: asm { x86_64 { ... } }
     if (parser_check(parser, TOKEN_IDENTIFIER))
     {
         char *ident = lexer_raw_value(parser->lexer, parser->current);
         if (parser_is_isa_name(ident))
         {
-            // save ISA name
             node->masm_stmt.isa_name = ident;
             parser_advance(parser);
 
@@ -2135,7 +2230,6 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
                 return NULL;
             }
 
-            // extract ISA-specific content
             node->masm_stmt.isa_content = parser_extract_brace_content(parser);
             if (!node->masm_stmt.isa_content)
             {
@@ -2151,8 +2245,7 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
                 return NULL;
             }
 
-            // consume outer closing brace
-            if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after masm block"))
+            if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after asm block"))
             {
                 ast_node_dnit(node);
                 free(node);
@@ -2167,7 +2260,6 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
         }
     }
 
-    // no ISA block, extract portable asm content
     node->masm_stmt.content = parser_extract_brace_content(parser);
     if (!node->masm_stmt.content)
     {
@@ -2176,7 +2268,7 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
         return NULL;
     }
 
-    if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after masm block"))
+    if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after asm block"))
     {
         ast_node_dnit(node);
         free(node);
