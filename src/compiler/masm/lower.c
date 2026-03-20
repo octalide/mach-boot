@@ -3515,6 +3515,29 @@ static MasmOperand parse_operand(const char *str, LowerContext *ctx)
         return masm_operand_none();
     }
 
+    // handle {identifier} syntax: strip braces and resolve as local variable
+    if (str[0] == '{')
+    {
+        size_t len = strlen(str);
+        if (len >= 3 && str[len - 1] == '}')
+        {
+            char name[64];
+            size_t nlen = len - 2 < sizeof(name) - 1 ? len - 2 : sizeof(name) - 1;
+            memcpy(name, str + 1, nlen);
+            name[nlen] = '\0';
+            if (ctx)
+            {
+                LocalVar *var = find_local_var(ctx, name);
+                if (var)
+                {
+                    return frame_mem(ctx, var->offset, var->size);
+                }
+            }
+            fprintf(stderr, "error: unknown local variable '{%s}' in inline asm\n", name);
+            return masm_operand_none();
+        }
+    }
+
     const char *base = str;
     const char *dot  = strrchr(str, '.');
     if (dot && dot[1] != '\0')
@@ -3574,7 +3597,7 @@ static MasmOperand parse_operand(const char *str, LowerContext *ctx)
         return masm_operand_imm(val);
     }
 
-    // parse variable
+    // parse variable (bare name, backwards compatible)
     if (ctx)
     {
         LocalVar *var = find_local_var(ctx, base);
