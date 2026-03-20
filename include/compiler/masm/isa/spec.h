@@ -11,14 +11,6 @@
 struct Masm;
 struct MasmSection;
 
-// local variable descriptor for inline asm resolution
-typedef struct MasmAsmLocal
-{
-    const char *name;
-    int32_t     offset; // frame pointer relative (negative for locals)
-    uint8_t     size;
-} MasmAsmLocal;
-
 // ISA-level opcode provider for target-specific operations
 typedef struct MasmISASpec
 {
@@ -26,7 +18,6 @@ typedef struct MasmISASpec
     MasmOperand (*reg_result)(uint8_t size);
     MasmOperand (*reg_tmp0)(uint8_t size);
     MasmOperand (*reg_tmp1)(uint8_t size);
-    // Adding div_hi and div_lo roles for division operations
     MasmOperand (*reg_div_hi)(uint8_t size);
     MasmOperand (*reg_div_lo)(uint8_t size);
     MasmOperand (*reg_arg)(int index, uint8_t size); // integer args per ABI/ISA
@@ -47,8 +38,7 @@ typedef struct MasmISASpec
     MasmOperand (*parse_reg)(const char *name, uint8_t ptr_size);
 
     // parse inline asm block and emit target-specific instructions
-    void (*parse_inline_asm)(struct MasmSection *section, const char *content, uint8_t ptr_size,
-                             MasmAsmLocal *locals, int local_count, uint32_t fp_reg);
+    void (*parse_inline_asm)(struct MasmSection *section, const char *content, uint8_t ptr_size);
 
     // instruction selection: lower IR to target-specific opcodes
     void (*isel)(struct Masm *masm);

@@ -77,20 +77,8 @@ static MasmOperand parse_reg(const char *name, uint8_t ptr_size)
     return masm_operand_none();
 }
 
-// find a local variable by name in the locals array
-static MasmAsmLocal *find_asm_local(MasmAsmLocal *locals, int local_count, const char *name)
-{
-    for (int i = local_count - 1; i >= 0; i--)
-    {
-        if (locals[i].name && strcmp(locals[i].name, name) == 0)
-            return &locals[i];
-    }
-    return NULL;
-}
-
-// parse operand: register, immediate, memory, or local/global symbol
-static MasmOperand parse_operand(const char *str, uint8_t ptr_size,
-                                 MasmAsmLocal *locals, int local_count, uint32_t fp_reg)
+// parse operand: register, immediate, memory, or global symbol
+static MasmOperand parse_operand(const char *str, uint8_t ptr_size)
 {
     // try register first
     MasmOperand reg = parse_reg(str, ptr_size);
@@ -99,7 +87,7 @@ static MasmOperand parse_operand(const char *str, uint8_t ptr_size,
         return reg;
     }
 
-    // parse simple memory operands: [reg] or [reg+imm] or [reg-imm] or [name]
+    // parse simple memory operands: [reg] or [reg+imm] or [reg-imm]
     if (str[0] == '[')
     {
         size_t len = strlen(str);
@@ -138,11 +126,6 @@ static MasmOperand parse_operand(const char *str, uint8_t ptr_size,
 
             if (!sep && strlen(reg_str) > 0)
             {
-                // check local variables first
-                MasmAsmLocal *local = find_asm_local(locals, local_count, reg_str);
-                if (local)
-                    return masm_operand_memory_simple(fp_reg, local->offset, local->size);
-
                 return masm_operand_symbol(strdup(reg_str));
             }
         }
@@ -197,8 +180,7 @@ static void trim_trailing(char *s)
 }
 
 // parse two-operand instruction: "op dst, src"
-static bool parse_two_op(char *args, MasmOperand *dst, MasmOperand *src, uint8_t ptr_size,
-                         MasmAsmLocal *locals, int local_count, uint32_t fp_reg)
+static bool parse_two_op(char *args, MasmOperand *dst, MasmOperand *src, uint8_t ptr_size)
 {
     char *comma = strchr(args, ',');
     if (!comma) return false;
@@ -209,24 +191,22 @@ static bool parse_two_op(char *args, MasmOperand *dst, MasmOperand *src, uint8_t
     trim_trailing(dst_s);
     trim_trailing(src_s);
 
-    *dst = parse_operand(dst_s, ptr_size, locals, local_count, fp_reg);
-    *src = parse_operand(src_s, ptr_size, locals, local_count, fp_reg);
+    *dst = parse_operand(dst_s, ptr_size);
+    *src = parse_operand(src_s, ptr_size);
 
     return dst->kind != MASM_OPERAND_NONE && src->kind != MASM_OPERAND_NONE;
 }
 
 // parse one-operand instruction: "op operand"
-static bool parse_one_op(char *args, MasmOperand *op, uint8_t ptr_size,
-                         MasmAsmLocal *locals, int local_count, uint32_t fp_reg)
+static bool parse_one_op(char *args, MasmOperand *op, uint8_t ptr_size)
 {
     char *s = trim_leading(args);
     trim_trailing(s);
-    *op = parse_operand(s, ptr_size, locals, local_count, fp_reg);
+    *op = parse_operand(s, ptr_size);
     return op->kind != MASM_OPERAND_NONE;
 }
 
-void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_t ptr_size,
-                               MasmAsmLocal *locals, int local_count, uint32_t fp_reg)
+void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_t ptr_size)
 {
     char *line    = strdup(content);
     char *saveptr = NULL;
@@ -322,7 +302,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // cmp dst, src
         else if (strncmp(token, "cmp ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -337,7 +317,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // test dst, src
         else if (strncmp(token, "test ", 5) == 0)
         {
-            if (parse_two_op(token + 5, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 5, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -352,7 +332,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // mov dst, src
         else if (strncmp(token, "mov ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (dst.kind == MASM_OPERAND_REGISTER && src.kind == MASM_OPERAND_SYMBOL)
                 {
@@ -393,7 +373,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // movzx dst, src (zero extend)
         else if (strncmp(token, "movzx ", 6) == 0)
         {
-            if (parse_two_op(token + 6, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 6, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_MEMORY)
                 {
@@ -408,7 +388,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // movsx dst, src (sign extend)
         else if (strncmp(token, "movsx ", 6) == 0)
         {
-            if (parse_two_op(token + 6, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 6, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_MEMORY)
                 {
@@ -423,7 +403,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // lea dst, src
         else if (strncmp(token, "lea ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_LEA, dst, src));
             }
@@ -431,7 +411,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // add dst, src
         else if (strncmp(token, "add ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -446,7 +426,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // sub dst, src
         else if (strncmp(token, "sub ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -461,7 +441,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // and dst, src
         else if (strncmp(token, "and ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -476,7 +456,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // or dst, src
         else if (strncmp(token, "or ", 3) == 0)
         {
-            if (parse_two_op(token + 3, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 3, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -491,7 +471,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // xor dst, src
         else if (strncmp(token, "xor ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -506,7 +486,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // shl dst, src
         else if (strncmp(token, "shl ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -521,7 +501,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // shr dst, src
         else if (strncmp(token, "shr ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -536,7 +516,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // sar dst, src
         else if (strncmp(token, "sar ", 4) == 0)
         {
-            if (parse_two_op(token + 4, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 4, &dst, &src, ptr_size))
             {
                 if (src.kind == MASM_OPERAND_IMM)
                 {
@@ -551,7 +531,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // push src
         else if (strncmp(token, "push ", 5) == 0)
         {
-            if (parse_one_op(token + 5, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 5, &src, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_PUSH_R, src));
             }
@@ -559,7 +539,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // pop dst
         else if (strncmp(token, "pop ", 4) == 0)
         {
-            if (parse_one_op(token + 4, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 4, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_POP_R, dst));
             }
@@ -567,7 +547,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // neg dst
         else if (strncmp(token, "neg ", 4) == 0)
         {
-            if (parse_one_op(token + 4, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 4, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_NEG_R, dst));
             }
@@ -575,7 +555,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // not dst
         else if (strncmp(token, "not ", 4) == 0)
         {
-            if (parse_one_op(token + 4, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 4, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_NOT_R, dst));
             }
@@ -583,7 +563,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // inc dst
         else if (strncmp(token, "inc ", 4) == 0)
         {
-            if (parse_one_op(token + 4, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 4, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_INC_R, dst));
             }
@@ -591,7 +571,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // dec dst
         else if (strncmp(token, "dec ", 4) == 0)
         {
-            if (parse_one_op(token + 4, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 4, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_DEC_R, dst));
             }
@@ -599,7 +579,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // lock cmpxchg [mem], reg
         else if (strncmp(token, "lock cmpxchg ", 13) == 0)
         {
-            if (parse_two_op(token + 13, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 13, &dst, &src, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_LOCK_CMPXCHG_MR, dst, src));
             }
@@ -607,7 +587,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // lock xadd [mem], reg
         else if (strncmp(token, "lock xadd ", 10) == 0)
         {
-            if (parse_two_op(token + 10, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 10, &dst, &src, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_2(MASM_OP_X86_LOCK_XADD_MR, dst, src));
             }
@@ -615,7 +595,7 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // xchg dst, src
         else if (strncmp(token, "xchg ", 5) == 0)
         {
-            if (parse_two_op(token + 5, &dst, &src, ptr_size, locals, local_count, fp_reg))
+            if (parse_two_op(token + 5, &dst, &src, ptr_size))
             {
                 if (dst.kind == MASM_OPERAND_REGISTER && src.kind == MASM_OPERAND_MEMORY)
                 {
@@ -634,70 +614,70 @@ void masm_x86_parse_inline_asm(MasmSection *section, const char *content, uint8_
         // setcc family
         else if (strncmp(token, "setz ", 5) == 0 || strncmp(token, "sete ", 5) == 0)
         {
-            if (parse_one_op(token + 5, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 5, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETE, dst));
             }
         }
         else if (strncmp(token, "setnz ", 6) == 0 || strncmp(token, "setne ", 6) == 0)
         {
-            if (parse_one_op(token + 6, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 6, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETNE, dst));
             }
         }
         else if (strncmp(token, "setl ", 5) == 0)
         {
-            if (parse_one_op(token + 5, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 5, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETL, dst));
             }
         }
         else if (strncmp(token, "setg ", 5) == 0)
         {
-            if (parse_one_op(token + 5, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 5, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETG, dst));
             }
         }
         else if (strncmp(token, "setle ", 6) == 0)
         {
-            if (parse_one_op(token + 6, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 6, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETLE, dst));
             }
         }
         else if (strncmp(token, "setge ", 6) == 0)
         {
-            if (parse_one_op(token + 6, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 6, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETGE, dst));
             }
         }
         else if (strncmp(token, "setb ", 5) == 0)
         {
-            if (parse_one_op(token + 5, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 5, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETB, dst));
             }
         }
         else if (strncmp(token, "seta ", 5) == 0)
         {
-            if (parse_one_op(token + 5, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 5, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETA, dst));
             }
         }
         else if (strncmp(token, "setbe ", 6) == 0)
         {
-            if (parse_one_op(token + 6, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 6, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETBE, dst));
             }
         }
         else if (strncmp(token, "setae ", 6) == 0)
         {
-            if (parse_one_op(token + 6, &dst, ptr_size, locals, local_count, fp_reg))
+            if (parse_one_op(token + 6, &dst, ptr_size))
             {
                 masm_section_append_inst(section, masm_x86_inst_1(MASM_OP_X86_SETAE, dst));
             }

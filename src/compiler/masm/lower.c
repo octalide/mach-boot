@@ -2426,6 +2426,66 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
     }
     return masm_operand_none();
 }
+
+static char *resolve_asm_locals(const char *content, LowerContext *ctx)
+{
+    size_t cap = strlen(content) * 2 + 1;
+    char *result = malloc(cap);
+    size_t rlen = 0;
+    const char *p = content;
+
+    while (*p)
+    {
+        if (*p == '{')
+        {
+            const char *start = p + 1;
+            const char *end = strchr(start, '}');
+            if (end && end > start)
+            {
+                size_t name_len = (size_t)(end - start);
+                char *name = malloc(name_len + 1);
+                memcpy(name, start, name_len);
+                name[name_len] = '\0';
+
+                LocalVar *var = find_local_var(ctx, name);
+                if (var)
+                {
+                    char subst[64];
+                    int32_t abs_off = var->offset < 0 ? -var->offset : var->offset;
+                    const char *sign = var->offset < 0 ? " - " : " + ";
+                    snprintf(subst, sizeof(subst), "[rbp%s%d]", sign, abs_off);
+                    size_t slen = strlen(subst);
+                    while (rlen + slen + 1 > cap)
+                    {
+                        cap *= 2;
+                        result = realloc(result, cap);
+                    }
+                    memcpy(result + rlen, subst, slen);
+                    rlen += slen;
+                    p = end + 1;
+                }
+                else
+                {
+                    fprintf(stderr, "error: unknown local variable '{%s}' in inline asm\n", name);
+                    free(name);
+                    free(result);
+                    return strdup(content);
+                }
+                free(name);
+                continue;
+            }
+        }
+        if (rlen + 2 > cap)
+        {
+            cap *= 2;
+            result = realloc(result, cap);
+        }
+        result[rlen++] = *p++;
+    }
+    result[rlen] = '\0';
+    return result;
+}
+
 static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContext *ctx)
 {
     if (stmt->kind == AST_STMT_RET)
@@ -2788,21 +2848,58 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
             // ISA-specific block: delegate to ISA handler
             if (ctx->isa && ctx->isa->parse_inline_asm)
             {
-                size_t before = text->inst_count;
-                MasmAsmLocal *asm_locals = NULL;
-                if (ctx->var_count > 0)
+                AsmSpec *spec = stmt->masm_stmt.spec;
+                if (spec)
                 {
-                    asm_locals = malloc(sizeof(MasmAsmLocal) * ctx->var_count);
-                    for (int li = 0; li < ctx->var_count; li++)
+                    for (int si = 0; si < spec->count; si++)
                     {
-                        asm_locals[li].name   = ctx->vars[li].name;
-                        asm_locals[li].offset = ctx->vars[li].offset;
-                        asm_locals[li].size   = ctx->vars[li].size;
+                        AsmSpecItem *item = &spec->items[si];
+                        if (item->kind == ASM_SPEC_IN && item->expr && item->reg_name)
+                        {
+                            MasmOperand val = lower_expr(masm, text, item->expr, ctx);
+                            val = ensure_in_reg(text, val, item->expr->type, ctx);
+                            MasmOperand reg = ctx->isa->parse_reg(item->reg_name, ctx->ptr_size);
+                            if (reg.kind == MASM_OPERAND_REGISTER)
+                            {
+                                masm_section_append_inst(text, masm_inst_2(MASM_IR_MOV, reg, val));
+                            }
+                            else
+                            {
+                                fprintf(stderr, "error: unknown register '%s' in asm spec\n", item->reg_name);
+                            }
+                        }
                     }
                 }
-                ctx->isa->parse_inline_asm(text, stmt->masm_stmt.isa_content, ctx->ptr_size,
-                                           asm_locals, ctx->var_count, ctx->fp_reg);
-                free(asm_locals);
+
+                size_t before = text->inst_count;
+                char *resolved = resolve_asm_locals(stmt->masm_stmt.isa_content, ctx);
+                ctx->isa->parse_inline_asm(text, resolved, ctx->ptr_size);
+                free(resolved);
+
+                if (spec)
+                {
+                    for (int si = 0; si < spec->count; si++)
+                    {
+                        AsmSpecItem *item = &spec->items[si];
+                        if (item->kind == ASM_SPEC_OUT && item->var_name && item->reg_name)
+                        {
+                            MasmOperand reg = ctx->isa->parse_reg(item->reg_name, ctx->ptr_size);
+                            if (reg.kind != MASM_OPERAND_REGISTER)
+                            {
+                                fprintf(stderr, "error: unknown register '%s' in asm spec\n", item->reg_name);
+                                continue;
+                            }
+                            LocalVar *var = find_local_var(ctx, item->var_name);
+                            if (!var)
+                            {
+                                fprintf(stderr, "error: unknown local variable '%s' in asm out spec\n", item->var_name);
+                                continue;
+                            }
+                            MasmOperand mem = frame_mem(ctx, var->offset, var->size);
+                            masm_section_append_inst(text, masm_inst_3(MASM_IR_STORE, mem, reg, masm_operand_imm(var->size)));
+                        }
+                    }
+                }
                 if (ctx->symbols)
                 {
                     for (size_t i = before; i < text->inst_count; i++)
@@ -3453,6 +3550,29 @@ static MasmOperand parse_operand(const char *str, LowerContext *ctx)
         return masm_operand_none();
     }
 
+    // handle {identifier} syntax: strip braces and resolve as local variable
+    if (str[0] == '{')
+    {
+        size_t len = strlen(str);
+        if (len >= 3 && str[len - 1] == '}')
+        {
+            char name[64];
+            size_t nlen = len - 2 < sizeof(name) - 1 ? len - 2 : sizeof(name) - 1;
+            memcpy(name, str + 1, nlen);
+            name[nlen] = '\0';
+            if (ctx)
+            {
+                LocalVar *var = find_local_var(ctx, name);
+                if (var)
+                {
+                    return frame_mem(ctx, var->offset, var->size);
+                }
+            }
+            fprintf(stderr, "error: unknown local variable '{%s}' in inline asm\n", name);
+            return masm_operand_none();
+        }
+    }
+
     const char *base = str;
     const char *dot  = strrchr(str, '.');
     if (dot && dot[1] != '\0')
@@ -3512,7 +3632,7 @@ static MasmOperand parse_operand(const char *str, LowerContext *ctx)
         return masm_operand_imm(val);
     }
 
-    // parse variable
+    // parse variable (bare name, backwards compatible)
     if (ctx)
     {
         LocalVar *var = find_local_var(ctx, base);
