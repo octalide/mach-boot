@@ -2873,21 +2873,8 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
 
                 size_t before = text->inst_count;
                 char *resolved = resolve_asm_locals(stmt->masm_stmt.isa_content, ctx);
-                MasmAsmLocal *asm_locals = NULL;
-                if (ctx->var_count > 0)
-                {
-                    asm_locals = malloc(sizeof(MasmAsmLocal) * ctx->var_count);
-                    for (int li = 0; li < ctx->var_count; li++)
-                    {
-                        asm_locals[li].name   = ctx->vars[li].name;
-                        asm_locals[li].offset = ctx->vars[li].offset;
-                        asm_locals[li].size   = ctx->vars[li].size;
-                    }
-                }
-                ctx->isa->parse_inline_asm(text, resolved, ctx->ptr_size,
-                                           asm_locals, ctx->var_count, ctx->fp_reg);
+                ctx->isa->parse_inline_asm(text, resolved, ctx->ptr_size);
                 free(resolved);
-                free(asm_locals);
 
                 if (spec)
                 {
