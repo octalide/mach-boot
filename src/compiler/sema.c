@@ -4200,6 +4200,34 @@ static Type *sema_resolve_type(Sema *sema, AstNode *type_node)
         // non-generic type or generic type used without args (error case, but return type for now)
         if (sym->type)
         {
+            // if the type has size=0 and has a declaration, force analysis to compute layout
+            if (sym->type->size == 0 && sym->decl &&
+                (sym->type->kind == TYPE_STRUCT || sym->type->kind == TYPE_UNION))
+            {
+                SemaModule  *saved_mod     = sema->current_module;
+                SymbolTable *saved_tbl     = sema->current_table;
+                const char  *saved_path    = sema->module_path;
+                char        *saved_file    = sema->current_file_path;
+                char        *saved_source  = sema->current_source;
+
+                SemaModule *origin = sym->module_path ? sema_find_module(sema, sym->module_path) : NULL;
+                if (origin)
+                {
+                    sema->current_module    = origin;
+                    sema->current_table     = origin->table;
+                    sema->module_path       = origin->module_path;
+                    sema->current_file_path = origin->file_path;
+                    sema->current_source    = origin->source;
+                }
+
+                sema_analyze_stmt(sema, sym->decl);
+
+                sema->current_module    = saved_mod;
+                sema->current_table     = saved_tbl;
+                sema->module_path       = saved_path;
+                sema->current_file_path = saved_file;
+                sema->current_source    = saved_source;
+            }
             return sym->type;
         }
 
