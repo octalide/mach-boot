@@ -2093,10 +2093,15 @@ static char *parser_extract_brace_content(Parser *parser)
     return content;
 }
 
-static void parser_skip_asm_spec(Parser *parser)
+static AsmSpec *parser_parse_asm_spec(Parser *parser)
 {
     if (!parser_consume(parser, TOKEN_L_PAREN, "expected '(' for asm spec"))
-        return;
+        return NULL;
+
+    AsmSpec *spec = malloc(sizeof(AsmSpec));
+    spec->count    = 0;
+    spec->capacity = 4;
+    spec->items    = malloc(sizeof(AsmSpecItem) * spec->capacity);
 
     while (!parser_check(parser, TOKEN_R_PAREN) && !parser_is_at_end(parser))
     {
@@ -2108,25 +2113,49 @@ static void parser_skip_asm_spec(Parser *parser)
             bool is_clb = strcmp(kw, "clb") == 0;
             free(kw);
 
+            if (spec->count >= spec->capacity)
+            {
+                spec->capacity *= 2;
+                spec->items = realloc(spec->items, sizeof(AsmSpecItem) * spec->capacity);
+            }
+
             if (is_clb)
             {
                 parser_advance(parser); // 'clb'
+                char *reg = lexer_raw_value(parser->lexer, parser->current);
                 parser_advance(parser); // register name
+                spec->items[spec->count].kind     = ASM_SPEC_CLB;
+                spec->items[spec->count].reg_name = reg;
+                spec->items[spec->count].var_name = NULL;
+                spec->items[spec->count].expr     = NULL;
+                spec->count++;
             }
             else if (is_in)
             {
                 parser_advance(parser); // 'in'
+                char *reg = lexer_raw_value(parser->lexer, parser->current);
                 parser_advance(parser); // register name
                 parser_consume(parser, TOKEN_EQUAL, "expected '=' in asm spec");
                 AstNode *expr = parser_parse_expr(parser);
-                if (expr) { ast_node_dnit(expr); free(expr); }
+                spec->items[spec->count].kind     = ASM_SPEC_IN;
+                spec->items[spec->count].reg_name = reg;
+                spec->items[spec->count].var_name = NULL;
+                spec->items[spec->count].expr     = expr;
+                spec->count++;
             }
             else if (is_out)
             {
                 parser_advance(parser); // 'out'
+                char *var = lexer_raw_value(parser->lexer, parser->current);
                 parser_advance(parser); // binding name
                 parser_consume(parser, TOKEN_EQUAL, "expected '=' in asm spec");
+                char *reg = lexer_raw_value(parser->lexer, parser->current);
                 parser_advance(parser); // register name
+                spec->items[spec->count].kind     = ASM_SPEC_OUT;
+                spec->items[spec->count].reg_name = reg;
+                spec->items[spec->count].var_name = var;
+                spec->items[spec->count].expr     = NULL;
+                spec->count++;
             }
             else
             {
@@ -2143,6 +2172,7 @@ static void parser_skip_asm_spec(Parser *parser)
     }
 
     parser_consume(parser, TOKEN_R_PAREN, "expected ')' after asm spec");
+    return spec;
 }
 
 AstNode *parser_parse_stmt_mir(Parser *parser)
@@ -2161,6 +2191,7 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
     node->masm_stmt.content     = NULL;
     node->masm_stmt.isa_name    = NULL;
     node->masm_stmt.isa_content = NULL;
+    node->masm_stmt.spec        = NULL;
 
     // new syntax: asm <isa_name> [(<spec>)] { ... }
     if (parser_check(parser, TOKEN_IDENTIFIER))
@@ -2173,7 +2204,7 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
 
             if (parser_check(parser, TOKEN_L_PAREN))
             {
-                parser_skip_asm_spec(parser);
+                node->masm_stmt.spec = parser_parse_asm_spec(parser);
             }
 
             if (!parser_consume(parser, TOKEN_L_BRACE, "expected '{' after asm"))

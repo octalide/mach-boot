@@ -6,8 +6,31 @@
 #include <stdint.h>
 
 // forward statements
-typedef struct Type   Type;
-typedef struct Symbol Symbol;
+typedef struct Type    Type;
+typedef struct Symbol  Symbol;
+typedef struct AstNode AstNode;
+
+typedef enum AsmSpecKind
+{
+    ASM_SPEC_IN,
+    ASM_SPEC_OUT,
+    ASM_SPEC_CLB,
+} AsmSpecKind;
+
+typedef struct AsmSpecItem
+{
+    AsmSpecKind kind;
+    char       *reg_name;
+    char       *var_name;  // for 'out': local variable name
+    AstNode    *expr;      // for 'in': expression to evaluate
+} AsmSpecItem;
+
+typedef struct AsmSpec
+{
+    AsmSpecItem *items;
+    int          count;
+    int          capacity;
+} AsmSpec;
 
 typedef enum AstKind
 {
@@ -66,7 +89,6 @@ typedef enum AstKind
     AST_TYPE_UNI,
 } AstKind;
 
-typedef struct AstNode AstNode;
 typedef struct AstList AstList;
 
 // generic list for child nodes
@@ -96,9 +118,10 @@ struct AstNode
         // masm block
         struct
         {
-            char *content;      // portable asm content (IR-based)
-            char *isa_name;     // ISA-specific block name (e.g., "x86_64"), NULL if none
-            char *isa_content;  // ISA-specific asm content, NULL if none
+            char    *content;      // portable asm content (IR-based)
+            char    *isa_name;     // ISA-specific block name (e.g., "x86_64"), NULL if none
+            char    *isa_content;  // ISA-specific asm content, NULL if none
+            AsmSpec *spec;         // in/out/clb spec items, NULL if none
         } masm_stmt;
 
         // module statement

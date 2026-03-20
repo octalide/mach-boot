@@ -284,6 +284,22 @@ void ast_node_dnit(AstNode *node)
         {
             free(node->masm_stmt.isa_content);
         }
+        if (node->masm_stmt.spec)
+        {
+            for (int i = 0; i < node->masm_stmt.spec->count; i++)
+            {
+                AsmSpecItem *item = &node->masm_stmt.spec->items[i];
+                free(item->reg_name);
+                free(item->var_name);
+                if (item->expr)
+                {
+                    ast_node_dnit(item->expr);
+                    free(item->expr);
+                }
+            }
+            free(node->masm_stmt.spec->items);
+            free(node->masm_stmt.spec);
+        }
         break;
 
     case AST_COMPTIME:
@@ -745,6 +761,22 @@ static AstNode *ast_clone_checked(const AstNode *node)
         if (node->masm_stmt.isa_content)
         {
             clone->masm_stmt.isa_content = strdup(node->masm_stmt.isa_content);
+        }
+        if (node->masm_stmt.spec)
+        {
+            AsmSpec *spec = malloc(sizeof(AsmSpec));
+            spec->count    = node->masm_stmt.spec->count;
+            spec->capacity = spec->count;
+            spec->items    = malloc(sizeof(AsmSpecItem) * spec->capacity);
+            for (int i = 0; i < spec->count; i++)
+            {
+                AsmSpecItem *src_item = &node->masm_stmt.spec->items[i];
+                spec->items[i].kind     = src_item->kind;
+                spec->items[i].reg_name = src_item->reg_name ? strdup(src_item->reg_name) : NULL;
+                spec->items[i].var_name = src_item->var_name ? strdup(src_item->var_name) : NULL;
+                spec->items[i].expr     = src_item->expr ? ast_clone(src_item->expr) : NULL;
+            }
+            clone->masm_stmt.spec = spec;
         }
         break;
 

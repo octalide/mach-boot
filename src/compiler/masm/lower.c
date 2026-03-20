@@ -2848,6 +2848,29 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
             // ISA-specific block: delegate to ISA handler
             if (ctx->isa && ctx->isa->parse_inline_asm)
             {
+                AsmSpec *spec = stmt->masm_stmt.spec;
+                if (spec)
+                {
+                    for (int si = 0; si < spec->count; si++)
+                    {
+                        AsmSpecItem *item = &spec->items[si];
+                        if (item->kind == ASM_SPEC_IN && item->expr && item->reg_name)
+                        {
+                            MasmOperand val = lower_expr(masm, text, item->expr, ctx);
+                            val = ensure_in_reg(text, val, item->expr->type, ctx);
+                            MasmOperand reg = ctx->isa->parse_reg(item->reg_name, ctx->ptr_size);
+                            if (reg.kind == MASM_OPERAND_REGISTER)
+                            {
+                                masm_section_append_inst(text, masm_inst_2(MASM_IR_MOV, reg, val));
+                            }
+                            else
+                            {
+                                fprintf(stderr, "error: unknown register '%s' in asm spec\n", item->reg_name);
+                            }
+                        }
+                    }
+                }
+
                 size_t before = text->inst_count;
                 char *resolved = resolve_asm_locals(stmt->masm_stmt.isa_content, ctx);
                 MasmAsmLocal *asm_locals = NULL;
@@ -2865,6 +2888,31 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
                                            asm_locals, ctx->var_count, ctx->fp_reg);
                 free(resolved);
                 free(asm_locals);
+
+                if (spec)
+                {
+                    for (int si = 0; si < spec->count; si++)
+                    {
+                        AsmSpecItem *item = &spec->items[si];
+                        if (item->kind == ASM_SPEC_OUT && item->var_name && item->reg_name)
+                        {
+                            MasmOperand reg = ctx->isa->parse_reg(item->reg_name, ctx->ptr_size);
+                            if (reg.kind != MASM_OPERAND_REGISTER)
+                            {
+                                fprintf(stderr, "error: unknown register '%s' in asm spec\n", item->reg_name);
+                                continue;
+                            }
+                            LocalVar *var = find_local_var(ctx, item->var_name);
+                            if (!var)
+                            {
+                                fprintf(stderr, "error: unknown local variable '%s' in asm out spec\n", item->var_name);
+                                continue;
+                            }
+                            MasmOperand mem = frame_mem(ctx, var->offset, var->size);
+                            masm_section_append_inst(text, masm_inst_3(MASM_IR_STORE, mem, reg, masm_operand_imm(var->size)));
+                        }
+                    }
+                }
                 if (ctx->symbols)
                 {
                     for (size_t i = before; i < text->inst_count; i++)
