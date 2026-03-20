@@ -110,7 +110,7 @@ Type *type_create_struct(const char *name, TypeField *fields, int field_count)
     type->structure.name              = name ? strdup(name) : NULL;
     type->structure.fields            = fields;
     type->structure.field_count       = field_count;
-    type->structure.methods           = NULL; // initialize methods table
+    type->structure.methods           = NULL;
     type->structure.generic_args      = NULL;
     type->structure.generic_arg_count = 0;
 
@@ -124,24 +124,20 @@ Type *type_create_struct(const char *name, TypeField *fields, int field_count)
         size_t field_size  = field_type ? field_type->size : 0;
         size_t field_align = (field_type && field_type->alignment) ? field_type->alignment : 1;
 
-        // update struct alignment
         if (field_align > alignment)
         {
             alignment = field_align;
         }
 
-        // add padding
         if (size % field_align != 0)
         {
             size += field_align - (size % field_align);
         }
 
-        // set field offset
         fields[i].offset = size;
         size += field_size;
     }
 
-    // align total size
     if (size % alignment != 0)
     {
         size += alignment - (size % alignment);
