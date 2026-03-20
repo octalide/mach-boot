@@ -2426,6 +2426,66 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
     }
     return masm_operand_none();
 }
+
+static char *resolve_asm_locals(const char *content, LowerContext *ctx)
+{
+    size_t cap = strlen(content) * 2 + 1;
+    char *result = malloc(cap);
+    size_t rlen = 0;
+    const char *p = content;
+
+    while (*p)
+    {
+        if (*p == '{')
+        {
+            const char *start = p + 1;
+            const char *end = strchr(start, '}');
+            if (end && end > start)
+            {
+                size_t name_len = (size_t)(end - start);
+                char *name = malloc(name_len + 1);
+                memcpy(name, start, name_len);
+                name[name_len] = '\0';
+
+                LocalVar *var = find_local_var(ctx, name);
+                if (var)
+                {
+                    char subst[64];
+                    int32_t abs_off = var->offset < 0 ? -var->offset : var->offset;
+                    const char *sign = var->offset < 0 ? " - " : " + ";
+                    snprintf(subst, sizeof(subst), "[rbp%s%d]", sign, abs_off);
+                    size_t slen = strlen(subst);
+                    while (rlen + slen + 1 > cap)
+                    {
+                        cap *= 2;
+                        result = realloc(result, cap);
+                    }
+                    memcpy(result + rlen, subst, slen);
+                    rlen += slen;
+                    p = end + 1;
+                }
+                else
+                {
+                    fprintf(stderr, "error: unknown local variable '{%s}' in inline asm\n", name);
+                    free(name);
+                    free(result);
+                    return strdup(content);
+                }
+                free(name);
+                continue;
+            }
+        }
+        if (rlen + 2 > cap)
+        {
+            cap *= 2;
+            result = realloc(result, cap);
+        }
+        result[rlen++] = *p++;
+    }
+    result[rlen] = '\0';
+    return result;
+}
+
 static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContext *ctx)
 {
     if (stmt->kind == AST_STMT_RET)
@@ -2789,6 +2849,7 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
             if (ctx->isa && ctx->isa->parse_inline_asm)
             {
                 size_t before = text->inst_count;
+                char *resolved = resolve_asm_locals(stmt->masm_stmt.isa_content, ctx);
                 MasmAsmLocal *asm_locals = NULL;
                 if (ctx->var_count > 0)
                 {
@@ -2800,8 +2861,9 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
                         asm_locals[li].size   = ctx->vars[li].size;
                     }
                 }
-                ctx->isa->parse_inline_asm(text, stmt->masm_stmt.isa_content, ctx->ptr_size,
+                ctx->isa->parse_inline_asm(text, resolved, ctx->ptr_size,
                                            asm_locals, ctx->var_count, ctx->fp_reg);
+                free(resolved);
                 free(asm_locals);
                 if (ctx->symbols)
                 {
