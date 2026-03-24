@@ -412,12 +412,23 @@ bool type_is_numeric(Type *t)
     return type_is_integer(t) || type_is_float(t);
 }
 
-// mangle a type into Itanium-style encoding
-// primitives: length-prefixed name (e.g., "3i64", "2u8")
-// pointers: P<type>
-// arrays: A<count>_<elem_type>
-// records/unions: length-prefixed name, with I...E for generic args
-// returns number of chars written (not including null terminator)
+static int type_mangle_nested_name(const char *module_path, char *buffer, size_t buffer_size)
+{
+    int         written = 0;
+    const char *p       = module_path;
+
+    while (*p)
+    {
+        const char *dot = strchr(p, '.');
+        size_t      len = dot ? (size_t)(dot - p) : strlen(p);
+        size_t      rem = buffer_size > (size_t)written ? buffer_size - written : 0;
+        written += snprintf(buffer + written, rem, "%zu%.*s", len, (int)len, p);
+        p += len + (dot ? 1 : 0);
+    }
+
+    return written;
+}
+
 int type_mangle(Type *type, char *buffer, size_t buffer_size)
 {
     if (!type || !buffer || buffer_size == 0)
@@ -487,42 +498,34 @@ int type_mangle(Type *type, char *buffer, size_t buffer_size)
 
     case TYPE_STRUCT:
     {
+        const char *name     = type->structure.name ? type->structure.name : "anon";
+        size_t      name_len = strlen(name);
         if (type->structure.module_path)
         {
-            const char *mp     = type->structure.module_path;
-            size_t      mp_len = strlen(mp);
-            written            = snprintf(buffer, buffer_size, "%zu", mp_len);
-            for (size_t i = 0; i < mp_len && written < (int)buffer_size; i++)
-            {
-                buffer[written++] = (mp[i] == '.') ? '_' : mp[i];
-            }
+            written = snprintf(buffer, buffer_size, "N");
+            written += type_mangle_nested_name(type->structure.module_path, buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0);
+            written += snprintf(buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0, "%zu%sE", name_len, name);
         }
-        if (written < (int)buffer_size)
+        else
         {
-            const char *name     = type->structure.name ? type->structure.name : "anon";
-            size_t      name_len = strlen(name);
-            written += snprintf(buffer + written, buffer_size - written, "%zu%s", name_len, name);
+            written = snprintf(buffer, buffer_size, "%zu%s", name_len, name);
         }
         break;
     }
 
     case TYPE_UNION:
     {
+        const char *name     = type->union_type.name ? type->union_type.name : "anon";
+        size_t      name_len = strlen(name);
         if (type->union_type.module_path)
         {
-            const char *mp     = type->union_type.module_path;
-            size_t      mp_len = strlen(mp);
-            written            = snprintf(buffer, buffer_size, "%zu", mp_len);
-            for (size_t i = 0; i < mp_len && written < (int)buffer_size; i++)
-            {
-                buffer[written++] = (mp[i] == '.') ? '_' : mp[i];
-            }
+            written = snprintf(buffer, buffer_size, "N");
+            written += type_mangle_nested_name(type->union_type.module_path, buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0);
+            written += snprintf(buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0, "%zu%sE", name_len, name);
         }
-        if (written < (int)buffer_size)
+        else
         {
-            const char *name     = type->union_type.name ? type->union_type.name : "anon";
-            size_t      name_len = strlen(name);
-            written += snprintf(buffer + written, buffer_size - written, "%zu%s", name_len, name);
+            written = snprintf(buffer, buffer_size, "%zu%s", name_len, name);
         }
         break;
     }
