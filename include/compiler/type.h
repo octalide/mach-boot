@@ -71,6 +71,7 @@ struct Type
         struct
         {
             char               *name;
+            char               *module_path; // declaring module's dot-separated path
             TypeField          *fields;
             int                 field_count;
             struct SymbolTable *methods; // methods associated with this type
@@ -82,6 +83,7 @@ struct Type
         struct
         {
             char               *name;
+            char               *module_path; // declaring module's dot-separated path
             TypeField          *fields;
             int                 field_count;
             struct SymbolTable *methods; // methods associated with this type
@@ -104,8 +106,8 @@ Type *type_get_primitive(TypeKind kind);
 Type *type_create_pointer(Type *base);
 Type *type_create_array(Type *elem_type, size_t count);
 Type *type_create_function(Type *return_type, Type **param_types, int param_count);
-Type *type_create_struct(const char *name, TypeField *fields, int field_count);
-Type *type_create_union(const char *name, TypeField *fields, int field_count);
+Type *type_create_struct(const char *name, const char *module_path, TypeField *fields, int field_count);
+Type *type_create_union(const char *name, const char *module_path, TypeField *fields, int field_count);
 Type *type_create_generic_param(const char *name);
 
 // type checking
