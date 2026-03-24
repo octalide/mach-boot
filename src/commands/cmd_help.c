@@ -33,8 +33,8 @@ int cmd_help_handle(int argc, char **argv)
 {
     if (argc < 3)
     {
-        cmd_help_general(stderr);
-        return 1;
+        cmd_help_general(stdout);
+        return 0;
     }
 
     const char *command = argv[2];

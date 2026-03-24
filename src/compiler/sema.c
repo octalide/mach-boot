@@ -1847,7 +1847,7 @@ static int sema_analyze_rec(Sema *sema, AstNode *node)
     }
 
     // create record type FIRST (with NULL field types) so recursive references can find it
-    Type *rec_type = type_create_struct(node->rec_stmt.name, fields, field_count);
+    Type *rec_type = type_create_struct(node->rec_stmt.name, sema->module_path, fields, field_count);
     if (!rec_type)
     {
         if (fields)
@@ -1994,7 +1994,7 @@ static int sema_analyze_uni(Sema *sema, AstNode *node)
     }
 
     // create union type FIRST (with NULL field types) so recursive references can find it
-    Type *uni_type = type_create_union(node->uni_stmt.name, fields, field_count);
+    Type *uni_type = type_create_union(node->uni_stmt.name, sema->module_path, fields, field_count);
     if (!uni_type)
     {
         if (fields)
@@ -4372,7 +4372,7 @@ static Type *sema_resolve_type(Sema *sema, AstNode *type_node)
         }
 
         const char *name = (type_node->kind == AST_TYPE_REC) ? type_node->type_rec.name : type_node->type_uni.name;
-        return (type_node->kind == AST_TYPE_REC) ? type_create_struct(name, fields, field_count) : type_create_union(name, fields, field_count);
+        return (type_node->kind == AST_TYPE_REC) ? type_create_struct(name, sema->module_path, fields, field_count) : type_create_union(name, sema->module_path, fields, field_count);
     }
 
     default:
@@ -4594,7 +4594,7 @@ static Type *sema_instantiate_generic_type(Sema *sema, Symbol *generic_sym, AstL
     sema->current_table = prev_table;
 
     // create instantiated type
-    Type *inst_type = is_struct ? type_create_struct(mangled_name, fields, field_count) : type_create_union(mangled_name, fields, field_count);
+    Type *inst_type = is_struct ? type_create_struct(mangled_name, generic_sym->module_path, fields, field_count) : type_create_union(mangled_name, generic_sym->module_path, fields, field_count);
 
     if (!inst_type)
     {

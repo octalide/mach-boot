@@ -98,7 +98,7 @@ Type *type_create_function(Type *return_type, Type **param_types, int param_coun
     return type;
 }
 
-Type *type_create_struct(const char *name, TypeField *fields, int field_count)
+Type *type_create_struct(const char *name, const char *module_path, TypeField *fields, int field_count)
 {
     Type *type = malloc(sizeof(Type));
     if (!type)
@@ -108,6 +108,7 @@ Type *type_create_struct(const char *name, TypeField *fields, int field_count)
 
     type->kind                        = TYPE_STRUCT;
     type->structure.name              = name ? strdup(name) : NULL;
+    type->structure.module_path       = module_path ? strdup(module_path) : NULL;
     type->structure.fields            = fields;
     type->structure.field_count       = field_count;
     type->structure.methods           = NULL;
@@ -177,7 +178,7 @@ Type *type_get_builtin_va_list(void)
     fields[3].type = type_get_primitive(TYPE_PTR);
 
     // ignore strdup failures; type_create_struct will still compute layout.
-    builtin_va_list_type = type_create_struct("va_list", fields, 4);
+    builtin_va_list_type = type_create_struct("va_list", NULL, fields, 4);
     return builtin_va_list_type;
 }
 
@@ -233,12 +234,18 @@ bool type_equals(Type *a, Type *b)
         return true;
 
     case TYPE_STRUCT:
-        // nominal typing for structs: equal if they share the same name
         if (a->structure.name && b->structure.name)
         {
-            return strcmp(a->structure.name, b->structure.name) == 0;
+            if (strcmp(a->structure.name, b->structure.name) != 0)
+            {
+                return false;
+            }
+            if (a->structure.module_path && b->structure.module_path)
+            {
+                return strcmp(a->structure.module_path, b->structure.module_path) == 0;
+            }
+            return a->structure.module_path == b->structure.module_path;
         }
-        // if anonymous, compare structure
         if (a->structure.field_count != b->structure.field_count)
         {
             return false;
@@ -253,10 +260,17 @@ bool type_equals(Type *a, Type *b)
         return true;
 
     case TYPE_UNION:
-        // nominal typing for unions
         if (a->union_type.name && b->union_type.name)
         {
-            return strcmp(a->union_type.name, b->union_type.name) == 0;
+            if (strcmp(a->union_type.name, b->union_type.name) != 0)
+            {
+                return false;
+            }
+            if (a->union_type.module_path && b->union_type.module_path)
+            {
+                return strcmp(a->union_type.module_path, b->union_type.module_path) == 0;
+            }
+            return a->union_type.module_path == b->union_type.module_path;
         }
         if (a->union_type.field_count != b->union_type.field_count)
         {
@@ -308,7 +322,7 @@ bool type_can_assign_to(Type *from, Type *to)
     return false;
 }
 
-Type *type_create_union(const char *name, TypeField *fields, int field_count)
+Type *type_create_union(const char *name, const char *module_path, TypeField *fields, int field_count)
 {
     Type *type = malloc(sizeof(Type));
     if (!type)
@@ -318,9 +332,10 @@ Type *type_create_union(const char *name, TypeField *fields, int field_count)
 
     type->kind                         = TYPE_UNION;
     type->union_type.name              = name ? strdup(name) : NULL;
+    type->union_type.module_path       = module_path ? strdup(module_path) : NULL;
     type->union_type.fields            = fields;
     type->union_type.field_count       = field_count;
-    type->union_type.methods           = NULL; // initialize methods table
+    type->union_type.methods           = NULL;
     type->union_type.generic_args      = NULL;
     type->union_type.generic_arg_count = 0;
 
@@ -397,12 +412,23 @@ bool type_is_numeric(Type *t)
     return type_is_integer(t) || type_is_float(t);
 }
 
-// mangle a type into Itanium-style encoding
-// primitives: length-prefixed name (e.g., "3i64", "2u8")
-// pointers: P<type>
-// arrays: A<count>_<elem_type>
-// records/unions: length-prefixed name, with I...E for generic args
-// returns number of chars written (not including null terminator)
+static int type_mangle_nested_name(const char *module_path, char *buffer, size_t buffer_size)
+{
+    int         written = 0;
+    const char *p       = module_path;
+
+    while (*p)
+    {
+        const char *dot = strchr(p, '.');
+        size_t      len = dot ? (size_t)(dot - p) : strlen(p);
+        size_t      rem = buffer_size > (size_t)written ? buffer_size - written : 0;
+        written += snprintf(buffer + written, rem, "%zu%.*s", len, (int)len, p);
+        p += len + (dot ? 1 : 0);
+    }
+
+    return written;
+}
+
 int type_mangle(Type *type, char *buffer, size_t buffer_size)
 {
     if (!type || !buffer || buffer_size == 0)
@@ -472,20 +498,35 @@ int type_mangle(Type *type, char *buffer, size_t buffer_size)
 
     case TYPE_STRUCT:
     {
-        // length-prefixed struct name
         const char *name     = type->structure.name ? type->structure.name : "anon";
         size_t      name_len = strlen(name);
-        written              = snprintf(buffer, buffer_size, "%zu%s", name_len, name);
-        // note: generic args for structs would be appended by caller with I...E
+        if (type->structure.module_path)
+        {
+            written = snprintf(buffer, buffer_size, "N");
+            written += type_mangle_nested_name(type->structure.module_path, buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0);
+            written += snprintf(buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0, "%zu%sE", name_len, name);
+        }
+        else
+        {
+            written = snprintf(buffer, buffer_size, "%zu%s", name_len, name);
+        }
         break;
     }
 
     case TYPE_UNION:
     {
-        // length-prefixed union name
         const char *name     = type->union_type.name ? type->union_type.name : "anon";
         size_t      name_len = strlen(name);
-        written              = snprintf(buffer, buffer_size, "%zu%s", name_len, name);
+        if (type->union_type.module_path)
+        {
+            written = snprintf(buffer, buffer_size, "N");
+            written += type_mangle_nested_name(type->union_type.module_path, buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0);
+            written += snprintf(buffer + written, buffer_size > (size_t)written ? buffer_size - written : 0, "%zu%sE", name_len, name);
+        }
+        else
+        {
+            written = snprintf(buffer, buffer_size, "%zu%s", name_len, name);
+        }
         break;
     }
 
