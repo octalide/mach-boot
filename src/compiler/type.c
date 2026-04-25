@@ -182,6 +182,33 @@ Type *type_get_builtin_va_list(void)
     return builtin_va_list_type;
 }
 
+static Type *builtin_str_type = NULL;
+
+Type *type_get_builtin_str(void)
+{
+    if (builtin_str_type)
+    {
+        return builtin_str_type;
+    }
+
+    // str: rec { len: u32; data: *u8; }
+    // produced by string literals ("..."); the only complex builtin in mach.
+    TypeField *fields = calloc(2, sizeof(TypeField));
+    if (!fields)
+    {
+        return NULL;
+    }
+
+    fields[0].name = strdup("len");
+    fields[0].type = type_get_primitive(TYPE_U32);
+
+    fields[1].name = strdup("data");
+    fields[1].type = type_create_pointer(type_get_primitive(TYPE_U8));
+
+    builtin_str_type = type_create_struct("str", NULL, fields, 2);
+    return builtin_str_type;
+}
+
 bool type_equals(Type *a, Type *b)
 {
     if (!a || !b)

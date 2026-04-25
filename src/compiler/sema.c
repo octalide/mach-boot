@@ -3018,11 +3018,11 @@ int sema_analyze_expr(Sema *sema, AstNode *node)
                 node->type = type_get_primitive(TYPE_U8);
                 break;
             case TOKEN_LIT_STRING:
-                // simplified: string is pointer to u8
-                node->type = type_create_pointer(type_get_primitive(TYPE_U8));
+                // string literals produce values of the builtin str record type
+                node->type = type_get_builtin_str();
                 break;
             case TOKEN_LIT_ZSTR:
-                // zero-terminated string literal: same lowering as string for now
+                // zero-terminated string literals produce *u8 (raw byte pointer)
                 node->type = type_create_pointer(type_get_primitive(TYPE_U8));
                 break;
             default:
@@ -4181,6 +4181,12 @@ static Type *sema_resolve_type(Sema *sema, AstNode *type_node)
         if (strcmp(name, "va_list") == 0)
         {
             return type_get_builtin_va_list();
+        }
+
+        // builtin str (the type produced by double-quoted string literals)
+        if (strcmp(name, "str") == 0)
+        {
+            return type_get_builtin_str();
         }
 
         // look up user-defined types (local scope, then imports; or alias-qualified)
