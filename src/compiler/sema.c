@@ -3021,6 +3021,10 @@ int sema_analyze_expr(Sema *sema, AstNode *node)
                 // simplified: string is pointer to u8
                 node->type = type_create_pointer(type_get_primitive(TYPE_U8));
                 break;
+            case TOKEN_LIT_ZSTR:
+                // zero-terminated string literal: same lowering as string for now
+                node->type = type_create_pointer(type_get_primitive(TYPE_U8));
+                break;
             default:
                 break;
             }

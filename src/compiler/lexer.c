@@ -446,6 +446,77 @@ Token *lexer_parse_lit_string(Lexer *lexer)
     return string_token;
 }
 
+// zero-terminated string formatting rules:
+// - must be surrounded by backticks
+// - any character is allowed
+// the following escape sequences are allowed:
+// - `\'` for single quote
+// - `\"` for double quote
+// - `\\` for backslash
+// - `\`` for backtick
+// - `\n` for newline
+// - `\t` for tab
+// - `\r` for carriage return
+// - `\0` for null
+Token *lexer_parse_lit_zstr(Lexer *lexer)
+{
+    int start = lexer->pos;
+
+    if (lexer_current(lexer) != '`')
+    {
+        Token *error_token = malloc(sizeof(Token));
+        token_init(error_token, TOKEN_ERROR, start, 1);
+        return error_token;
+    }
+
+    lexer_advance(lexer);
+
+    while (!lexer_at_end(lexer) && lexer_current(lexer) != '`')
+    {
+        if (lexer_current(lexer) == '\\')
+        {
+            lexer_advance(lexer);
+
+            Token *error_token;
+
+            switch (lexer_current(lexer))
+            {
+            case '\'':
+            case '\"':
+            case '\\':
+            case '`':
+            case 'n':
+            case 't':
+            case 'r':
+            case '0':
+                lexer_advance(lexer);
+                break;
+            default:
+                error_token = malloc(sizeof(Token));
+                token_init(error_token, TOKEN_ERROR, start, lexer->pos - start);
+                return error_token;
+            }
+        }
+        else
+        {
+            lexer_advance(lexer);
+        }
+    }
+
+    if (lexer_at_end(lexer) || lexer_current(lexer) != '`')
+    {
+        Token *error_token = malloc(sizeof(Token));
+        token_init(error_token, TOKEN_ERROR, start, lexer->pos - start);
+        return error_token;
+    }
+
+    lexer_advance(lexer);
+
+    Token *zstr_token = malloc(sizeof(Token));
+    token_init(zstr_token, TOKEN_LIT_ZSTR, start, lexer->pos - start);
+    return zstr_token;
+}
+
 unsigned long long lexer_eval_lit_int(Lexer *lexer, Token *token)
 {
     int   base = 10;
@@ -605,6 +676,64 @@ char *lexer_eval_lit_string(Lexer *lexer, Token *token)
     return value;
 }
 
+char *lexer_eval_lit_zstr(Lexer *lexer, Token *token)
+{
+    int   src_len = token->len - 2; // inside backticks
+    char *value   = malloc((size_t)src_len + 1);
+    if (!value)
+    {
+        return NULL;
+    }
+
+    int j = 0;
+    for (int i = 0; i < src_len; i++)
+    {
+        char c = lexer->source[token->pos + 1 + i];
+        if (c == '\\' && i + 1 < src_len)
+        {
+            char e = lexer->source[token->pos + 1 + i + 1];
+            switch (e)
+            {
+            case '\'':
+                value[j++] = '\'';
+                break;
+            case '"':
+                value[j++] = '"';
+                break;
+            case '\\':
+                value[j++] = '\\';
+                break;
+            case '`':
+                value[j++] = '`';
+                break;
+            case 'n':
+                value[j++] = '\n';
+                break;
+            case 't':
+                value[j++] = '\t';
+                break;
+            case 'r':
+                value[j++] = '\r';
+                break;
+            case '0':
+                value[j++] = '\0';
+                break;
+            default:
+                // unknown escape: preserve as-is (common behavior)
+                value[j++] = e;
+                break;
+            }
+            i++; // skip the escaped character
+        }
+        else
+        {
+            value[j++] = c;
+        }
+    }
+    value[j] = '\0';
+    return value;
+}
+
 char *lexer_raw_value(Lexer *lexer, Token *token)
 {
     char *value = calloc(token->len + 1, sizeof(char));
@@ -649,6 +778,8 @@ Token *lexer_next(Lexer *lexer)
         return lexer_parse_lit_char(lexer);
     case '\"':
         return lexer_parse_lit_string(lexer);
+    case '`':
+        return lexer_parse_lit_zstr(lexer);
     case '(':
         return lexer_emit(lexer, TOKEN_L_PAREN, 1);
     case ')':

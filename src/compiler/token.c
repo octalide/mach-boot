@@ -56,6 +56,8 @@ char *token_kind_to_string(TokenKind kind)
         return "LIT_CHAR";
     case TOKEN_LIT_STRING:
         return "LIT_STRING";
+    case TOKEN_LIT_ZSTR:
+        return "LIT_ZSTR";
 
     case TOKEN_IDENTIFIER:
         return "IDENTIFIER";

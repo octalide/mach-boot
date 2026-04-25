@@ -2969,6 +2969,19 @@ AstNode *parser_parse_expr_atom(Parser *parser)
         return lit;
     }
 
+    case TOKEN_LIT_ZSTR:
+    {
+        AstNode *lit = parser_alloc_node(parser, AST_EXPR_LIT, parser->current);
+        if (!lit)
+        {
+            return NULL;
+        }
+        lit->lit_expr.kind       = TOKEN_LIT_ZSTR;
+        lit->lit_expr.string_val = lexer_eval_lit_zstr(parser->lexer, parser->current);
+        parser_advance(parser);
+        return lit;
+    }
+
     case TOKEN_L_PAREN:
     {
         parser_advance(parser);

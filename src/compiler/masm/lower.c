@@ -1708,7 +1708,7 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             memcpy(&bits, &fval, sizeof(bits));
             return masm_operand_imm((int64_t)bits);
         }
-        else if (expr->lit_expr.kind == TOKEN_LIT_STRING)
+        else if (expr->lit_expr.kind == TOKEN_LIT_STRING || expr->lit_expr.kind == TOKEN_LIT_ZSTR)
         {
 #ifdef MASM_DEBUG
             fprintf(stderr, "[lower_expr] string literal '%s', text=%p, inst_count before=%zu\n", expr->lit_expr.string_val, (void *)text, text->inst_count);
@@ -4290,7 +4290,7 @@ static void emit_global_data(Masm *masm, MasmSection *section, AstNode *expr, si
                 masm_section_append_zero(section, size - 8);
             }
         }
-        else if (expr->lit_expr.kind == TOKEN_LIT_STRING)
+        else if (expr->lit_expr.kind == TOKEN_LIT_STRING || expr->lit_expr.kind == TOKEN_LIT_ZSTR)
         {
             // String literal: emit the string to .rodata and store a pointer relocation
             const char *str_val = expr->lit_expr.string_val;
