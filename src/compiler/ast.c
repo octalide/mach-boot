@@ -389,7 +389,7 @@ void ast_node_dnit(AstNode *node)
         break;
 
     case AST_EXPR_LIT:
-        if (node->lit_expr.kind == TOKEN_LIT_STRING)
+        if (node->lit_expr.kind == TOKEN_LIT_STRING || node->lit_expr.kind == TOKEN_LIT_ZSTR)
         {
             free(node->lit_expr.string_val);
         }
@@ -830,6 +830,7 @@ static AstNode *ast_clone_checked(const AstNode *node)
             clone->lit_expr.char_val = node->lit_expr.char_val;
             break;
         case TOKEN_LIT_STRING:
+        case TOKEN_LIT_ZSTR:
             clone->lit_expr.string_val = ast_strdup(node->lit_expr.string_val);
             break;
         default:
@@ -1270,6 +1271,11 @@ void ast_print(AstNode *node, int indent)
             printf("STRING \"");
             print_escaped_string(stdout, node->lit_expr.string_val);
             printf("\"\n");
+            break;
+        case TOKEN_LIT_ZSTR:
+            printf("ZSTR `");
+            print_escaped_string(stdout, node->lit_expr.string_val);
+            printf("`\n");
             break;
         default:
             printf("???\n");
@@ -1821,6 +1827,11 @@ static void ast_print_to_file(AstNode *node, FILE *file, int indent)
             fprintf(file, "STRING \"");
             print_escaped_string(file, node->lit_expr.string_val);
             fprintf(file, "\"\n");
+            break;
+        case TOKEN_LIT_ZSTR:
+            fprintf(file, "ZSTR `");
+            print_escaped_string(file, node->lit_expr.string_val);
+            fprintf(file, "`\n");
             break;
         default:
             fprintf(file, "???\n");
