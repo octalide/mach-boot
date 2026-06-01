@@ -1710,36 +1710,58 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
         }
         else if (expr->lit_expr.kind == TOKEN_LIT_STRING)
         {
-#ifdef MASM_DEBUG
-            fprintf(stderr, "[lower_expr] string literal '%s', text=%p, inst_count before=%zu\n", expr->lit_expr.string_val, (void *)text, text->inst_count);
-#endif
-            // Create unique label
-            char label[32];
-            snprintf(label, sizeof(label), ".Lstr_%d", (*ctx->str_counter)++);
+            const char *str_val = expr->lit_expr.string_val;
+            size_t      len     = strlen(str_val);
 
-            // Add to .rodata
+            // Create unique label for the bytes
+            char bytes_label[32];
+            snprintf(bytes_label, sizeof(bytes_label), ".Lstr_%d", (*ctx->str_counter)++);
+
             MasmSection *rodata = masm_get_or_create_section(masm, ".rodata", MASM_SECTION_RODATA);
 
-            // Add label symbol
-            MasmSymbol *sym   = masm_symbol_create(label, MASM_SYMBOL_DATA, MASM_BIND_LOCAL);
-            sym->section_name = strdup(".rodata");
-            sym->offset       = rodata->data_size;
-            size_t len        = strlen(expr->lit_expr.string_val);
-            sym->size         = len + 1;
-            masm_add_symbol(masm, sym);
+            // Append string bytes (null-terminated for cstr / ffi compatibility) to .rodata
+            MasmSymbol *bytes_sym   = masm_symbol_create(bytes_label, MASM_SYMBOL_DATA, MASM_BIND_LOCAL);
+            bytes_sym->section_name = strdup(".rodata");
+            bytes_sym->offset       = rodata->data_size;
+            bytes_sym->size         = len + 1;
+            masm_add_symbol(masm, bytes_sym);
 
-            // append string data (null-terminated) to .rodata
-            masm_section_append_data(rodata, expr->lit_expr.string_val, len);
+            masm_section_append_data(rodata, str_val, len);
             uint8_t zero = 0;
             masm_section_append_data(rodata, &zero, 1);
 
-            // MOV result, label (absolute address)
+            // For double-quoted str literal: build a 16-byte str record { u32 len, *u8 data }
+            // in .rodata and return its address (aggregate convention).
+            char rec_label[32];
+            snprintf(rec_label, sizeof(rec_label), ".Lstrrec_%d", (*ctx->str_counter)++);
+
+            // Align to 8 (str record alignment is 8 due to the *u8 field)
+            while (rodata->data_size % 8 != 0)
+            {
+                masm_section_append_zero(rodata, 1);
+            }
+
+            MasmSymbol *rec_sym   = masm_symbol_create(rec_label, MASM_SYMBOL_DATA, MASM_BIND_LOCAL);
+            rec_sym->section_name = strdup(".rodata");
+            rec_sym->offset       = rodata->data_size;
+            rec_sym->size         = 16;
+            masm_add_symbol(masm, rec_sym);
+
+            // len: u32 at offset 0
+            uint32_t len_u32 = (uint32_t)len;
+            masm_section_append_data(rodata, &len_u32, 4);
+            // 4 bytes padding so data field is 8-byte aligned
+            masm_section_append_zero(rodata, 4);
+            // data: *u8 at offset 8 — placeholder, relocated to bytes_label
+            size_t  data_field_offset = rodata->data_size;
+            uint64_t zero_ptr         = 0;
+            masm_section_append_data(rodata, &zero_ptr, 8);
+            masm_section_append_reloc(rodata, data_field_offset, bytes_label, 0);
+
+            // Return the address of the str record (aggregate-by-pointer convention)
             MasmOperand res = isa_result(ctx, 8);
-            MasmOperand src = masm_operand_label(label);
+            MasmOperand src = masm_operand_label(rec_label);
             masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, res, src));
-#ifdef MASM_DEBUG
-            fprintf(stderr, "[lower_expr] string literal: emitted MOV, text section inst_count after=%zu\n", text->inst_count);
-#endif
             return res;
         }
     }
@@ -2845,61 +2867,14 @@ static void lower_stmt(Masm *masm, MasmSection *text, AstNode *stmt, LowerContex
     {
         if (stmt->masm_stmt.isa_name && stmt->masm_stmt.isa_content)
         {
-            // ISA-specific block: delegate to ISA handler
+            // ISA-tagged block: delegate raw body to the ISA handler
             if (ctx->isa && ctx->isa->parse_inline_asm)
             {
-                AsmSpec *spec = stmt->masm_stmt.spec;
-                if (spec)
-                {
-                    for (int si = 0; si < spec->count; si++)
-                    {
-                        AsmSpecItem *item = &spec->items[si];
-                        if (item->kind == ASM_SPEC_IN && item->expr && item->reg_name)
-                        {
-                            MasmOperand val = lower_expr(masm, text, item->expr, ctx);
-                            val = ensure_in_reg(text, val, item->expr->type, ctx);
-                            MasmOperand reg = ctx->isa->parse_reg(item->reg_name, ctx->ptr_size);
-                            if (reg.kind == MASM_OPERAND_REGISTER)
-                            {
-                                masm_section_append_inst(text, masm_inst_2(MASM_IR_MOV, reg, val));
-                            }
-                            else
-                            {
-                                fprintf(stderr, "error: unknown register '%s' in asm spec\n", item->reg_name);
-                            }
-                        }
-                    }
-                }
-
                 size_t before = text->inst_count;
                 char *resolved = resolve_asm_locals(stmt->masm_stmt.isa_content, ctx);
                 ctx->isa->parse_inline_asm(text, resolved, ctx->ptr_size);
                 free(resolved);
 
-                if (spec)
-                {
-                    for (int si = 0; si < spec->count; si++)
-                    {
-                        AsmSpecItem *item = &spec->items[si];
-                        if (item->kind == ASM_SPEC_OUT && item->var_name && item->reg_name)
-                        {
-                            MasmOperand reg = ctx->isa->parse_reg(item->reg_name, ctx->ptr_size);
-                            if (reg.kind != MASM_OPERAND_REGISTER)
-                            {
-                                fprintf(stderr, "error: unknown register '%s' in asm spec\n", item->reg_name);
-                                continue;
-                            }
-                            LocalVar *var = find_local_var(ctx, item->var_name);
-                            if (!var)
-                            {
-                                fprintf(stderr, "error: unknown local variable '%s' in asm out spec\n", item->var_name);
-                                continue;
-                            }
-                            MasmOperand mem = frame_mem(ctx, var->offset, var->size);
-                            masm_section_append_inst(text, masm_inst_3(MASM_IR_STORE, mem, reg, masm_operand_imm(var->size)));
-                        }
-                    }
-                }
                 if (ctx->symbols)
                 {
                     for (size_t i = before; i < text->inst_count; i++)
@@ -4292,43 +4267,39 @@ static void emit_global_data(Masm *masm, MasmSection *section, AstNode *expr, si
         }
         else if (expr->lit_expr.kind == TOKEN_LIT_STRING)
         {
-            // String literal: emit the string to .rodata and store a pointer relocation
-            const char *str_val = expr->lit_expr.string_val;
-            size_t      str_len = strlen(str_val) + 1; // include null terminator
+            // Emit the string bytes (null-terminated) to .rodata
+            const char *str_val   = expr->lit_expr.string_val;
+            size_t      bytes_len = strlen(str_val) + 1; // include null terminator
 
-            // Create unique label for the string
-            char label[64];
-            snprintf(label, sizeof(label), ".Lstr_%d", counters->str_counter++);
+            char bytes_label[64];
+            snprintf(bytes_label, sizeof(bytes_label), ".Lstr_%d", counters->str_counter++);
 
-            // Add string to .rodata
-            MasmSection *rodata = masm_get_or_create_section(masm, ".rodata", MASM_SECTION_RODATA);
+            MasmSection *rodata     = masm_get_or_create_section(masm, ".rodata", MASM_SECTION_RODATA);
+            MasmSymbol  *bytes_sym  = masm_symbol_create(bytes_label, MASM_SYMBOL_DATA, MASM_BIND_LOCAL);
+            bytes_sym->section_name = strdup(".rodata");
+            bytes_sym->offset       = rodata->data_size;
+            bytes_sym->size         = bytes_len;
+            masm_add_symbol(masm, bytes_sym);
 
-            // Create symbol for the string
-            MasmSymbol *sym   = masm_symbol_create(label, MASM_SYMBOL_DATA, MASM_BIND_LOCAL);
-            sym->section_name = strdup(".rodata");
-            sym->offset       = rodata->data_size;
-            sym->size         = str_len;
-            masm_add_symbol(masm, sym);
-
-            // Append string data to .rodata
-            masm_section_append_data(rodata, str_val, str_len - 1);
+            masm_section_append_data(rodata, str_val, bytes_len - 1);
             uint8_t zero = 0;
             masm_section_append_data(rodata, &zero, 1);
 
-            // Record the relocation offset in the data section (before appending zeros)
-            size_t reloc_offset = section->data_size;
-
-            // Emit placeholder zeros for the pointer (8 bytes for 64-bit)
-            size_t ptr_size = 8;
-            masm_section_append_zero(section, ptr_size);
-
-            // Add relocation entry pointing to the string symbol
-            masm_section_append_reloc(section, reloc_offset, label, 0);
-
-            // If size > 8, pad the rest
-            if (size > ptr_size)
+            // str literal in data context: emit the 16-byte record
+            //   { u32 len; pad 4; *u8 data; }
+            // directly into the section. The data field gets a relocation to bytes_label.
+            size_t   start_offset = section->data_size;
+            uint32_t len_u32      = (uint32_t)(bytes_len - 1); // exclude null terminator from len
+            masm_section_append_data(section, &len_u32, 4);
+            masm_section_append_zero(section, 4);
+            size_t   data_field_offset = section->data_size;
+            uint64_t zero_ptr          = 0;
+            masm_section_append_data(section, &zero_ptr, 8);
+            masm_section_append_reloc(section, data_field_offset, bytes_label, 0);
+            size_t written = section->data_size - start_offset;
+            if (size > written)
             {
-                masm_section_append_zero(section, size - ptr_size);
+                masm_section_append_zero(section, size - written);
             }
         }
         else

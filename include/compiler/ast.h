@@ -10,28 +10,6 @@ typedef struct Type    Type;
 typedef struct Symbol  Symbol;
 typedef struct AstNode AstNode;
 
-typedef enum AsmSpecKind
-{
-    ASM_SPEC_IN,
-    ASM_SPEC_OUT,
-    ASM_SPEC_CLB,
-} AsmSpecKind;
-
-typedef struct AsmSpecItem
-{
-    AsmSpecKind kind;
-    char       *reg_name;
-    char       *var_name;  // for 'out': local variable name
-    AstNode    *expr;      // for 'in': expression to evaluate
-} AsmSpecItem;
-
-typedef struct AsmSpec
-{
-    AsmSpecItem *items;
-    int          count;
-    int          capacity;
-} AsmSpec;
-
 typedef enum AstKind
 {
     AST_PROGRAM,
@@ -115,13 +93,12 @@ struct AstNode
             AstList *stmts;
         } program;
 
-        // masm block
+        // asm block (ISA-tagged, raw body)
         struct
         {
-            char    *content;      // portable asm content (IR-based)
-            char    *isa_name;     // ISA-specific block name (e.g., "x86_64"), NULL if none
-            char    *isa_content;  // ISA-specific asm content, NULL if none
-            AsmSpec *spec;         // in/out/clb spec items, NULL if none
+            char *content;      // unused by the new grammar; retained for backend lowering
+            char *isa_name;     // mandatory ISA tag (e.g. "x86_64")
+            char *isa_content;  // raw asm body captured verbatim
         } masm_stmt;
 
         // module statement
@@ -146,13 +123,11 @@ struct AstNode
             bool     is_public;
         } ext_stmt;
 
-        // forward (re-export) statement
+        // forward (re-export) statement; mirrors use grammar
         struct
         {
-            char *name;         // local name for the symbol
-            char *module_alias; // alias of the source module (e.g. "impl")
-            char *symbol_name;  // name in the source module (e.g. "read")
-            bool  is_public;
+            char *path;  // re-exported symbol path (e.g. "impl.Point")
+            char *alias; // optional rename leaf, NULL for path-leaf name
         } fwd_stmt;
 
         // type definition
@@ -224,6 +199,7 @@ struct AstNode
             char    *name;
             AstNode *type;
             bool     is_variadic; // sentinel for '...'
+            bool     is_comptime; // '$name: T' comptime value parameter
         } param_stmt;
 
         // block statement

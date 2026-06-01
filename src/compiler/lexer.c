@@ -279,15 +279,42 @@ Token *lexer_parse_lit_number(Lexer *lexer)
         lexer_advance(lexer);
     }
 
+    bool is_float = false;
+
     if (lexer_current(lexer) == '.')
     {
+        is_float = true;
         lexer_advance(lexer);
 
         while (!lexer_at_end(lexer) && (isdigit(lexer_current(lexer)) || lexer_current(lexer) == '_'))
         {
             lexer_advance(lexer);
         }
+    }
 
+    // scientific notation exponent: e/E followed by an optional sign and digits.
+    // an exponent makes the literal a float even without a fractional part (1e10).
+    if (lexer_current(lexer) == 'e' || lexer_current(lexer) == 'E')
+    {
+        char next = lexer_peek(lexer, 1);
+        int  digit_offset = (next == '+' || next == '-') ? 2 : 1;
+        if (isdigit(lexer_peek(lexer, digit_offset)))
+        {
+            is_float = true;
+            lexer_advance(lexer); // consume e/E
+            if (lexer_current(lexer) == '+' || lexer_current(lexer) == '-')
+            {
+                lexer_advance(lexer); // consume sign
+            }
+            while (!lexer_at_end(lexer) && (isdigit(lexer_current(lexer)) || lexer_current(lexer) == '_'))
+            {
+                lexer_advance(lexer);
+            }
+        }
+    }
+
+    if (is_float)
+    {
         Token *float_token  = malloc(sizeof(Token));
         char  *float_suffix = lexer_parse_type_suffix(lexer);
         int    float_len    = lexer->pos - start;
@@ -309,12 +336,12 @@ Token *lexer_parse_lit_number(Lexer *lexer)
 // - only one character is allowed
 // the following escape sequences are allowed:
 // - `\'` for single quote
-// - `\"` for double quote
 // - `\\` for backslash
 // - `\n` for newline
 // - `\t` for tab
 // - `\r` for carriage return
 // - `\0` for null
+// - `\xHH` for a hex byte
 Token *lexer_parse_lit_char(Lexer *lexer)
 {
     int start = lexer->pos;
@@ -344,12 +371,22 @@ Token *lexer_parse_lit_char(Lexer *lexer)
         switch (lexer_current(lexer))
         {
         case '\'':
-        case '\"':
         case '\\':
         case 'n':
         case 't':
         case 'r':
         case '0':
+            lexer_advance(lexer);
+            break;
+        case 'x':
+            lexer_advance(lexer);
+            if (!isxdigit(lexer_current(lexer)) || !isxdigit(lexer_peek(lexer, 1)))
+            {
+                error_token = malloc(sizeof(Token));
+                token_init(error_token, TOKEN_ERROR, start, lexer->pos - start);
+                return error_token;
+            }
+            lexer_advance(lexer);
             lexer_advance(lexer);
             break;
         default:
@@ -379,7 +416,7 @@ Token *lexer_parse_lit_char(Lexer *lexer)
 
 // string formatting rules:
 // - must be surrounded by double quotes
-// - any character is allowed
+// - single line; any character except a raw newline is allowed
 // the following escape sequences are allowed:
 // - `\'` for single quote
 // - `\"` for double quote
@@ -388,6 +425,7 @@ Token *lexer_parse_lit_char(Lexer *lexer)
 // - `\t` for tab
 // - `\r` for carriage return
 // - `\0` for null
+// - `\xHH` for a hex byte
 Token *lexer_parse_lit_string(Lexer *lexer)
 {
     int start = lexer->pos;
@@ -418,6 +456,17 @@ Token *lexer_parse_lit_string(Lexer *lexer)
             case 't':
             case 'r':
             case '0':
+                lexer_advance(lexer);
+                break;
+            case 'x':
+                lexer_advance(lexer);
+                if (!isxdigit(lexer_current(lexer)) || !isxdigit(lexer_peek(lexer, 1)))
+                {
+                    error_token = malloc(sizeof(Token));
+                    token_init(error_token, TOKEN_ERROR, start, lexer->pos - start);
+                    return error_token;
+                }
+                lexer_advance(lexer);
                 lexer_advance(lexer);
                 break;
             default:
@@ -515,6 +564,23 @@ double lexer_eval_lit_float(Lexer *lexer, Token *token)
     return value;
 }
 
+static int hex_digit_value(char c)
+{
+    if (c >= '0' && c <= '9')
+    {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f')
+    {
+        return c - 'a' + 10;
+    }
+    if (c >= 'A' && c <= 'F')
+    {
+        return c - 'A' + 10;
+    }
+    return 0;
+}
+
 char lexer_eval_lit_char(Lexer *lexer, Token *token)
 {
     char value = lexer->source[token->pos + 1];
@@ -525,9 +591,6 @@ char lexer_eval_lit_char(Lexer *lexer, Token *token)
         {
         case '\'':
             value = '\'';
-            break;
-        case '\"':
-            value = '\"';
             break;
         case '\\':
             value = '\\';
@@ -543,6 +606,9 @@ char lexer_eval_lit_char(Lexer *lexer, Token *token)
             break;
         case '0':
             value = '\0';
+            break;
+        case 'x':
+            value = (char)((hex_digit_value(lexer->source[token->pos + 3]) << 4) | hex_digit_value(lexer->source[token->pos + 4]));
             break;
         }
     }
@@ -588,6 +654,19 @@ char *lexer_eval_lit_string(Lexer *lexer, Token *token)
                 break;
             case '0':
                 value[j++] = '\0';
+                break;
+            case 'x':
+                if (i + 3 < src_len)
+                {
+                    char hi    = lexer->source[token->pos + 1 + i + 2];
+                    char lo    = lexer->source[token->pos + 1 + i + 3];
+                    value[j++] = (char)((hex_digit_value(hi) << 4) | hex_digit_value(lo));
+                    i += 2; // skip the two hex digits (the 'x' is skipped below)
+                }
+                else
+                {
+                    value[j++] = e;
+                }
                 break;
             default:
                 // unknown escape: preserve as-is (common behavior)
@@ -649,6 +728,9 @@ Token *lexer_next(Lexer *lexer)
         return lexer_parse_lit_char(lexer);
     case '\"':
         return lexer_parse_lit_string(lexer);
+    case '`':
+        // backtick is reserved with no assigned syntactic role
+        return lexer_emit(lexer, TOKEN_ERROR, 1);
     case '(':
         return lexer_emit(lexer, TOKEN_L_PAREN, 1);
     case ')':

@@ -8,8 +8,7 @@ static AstNode  *parser_alloc_node(Parser *parser, AstKind kind, Token *token);
 static AstList  *parser_alloc_list(Parser *parser);
 static void      parser_free_node(AstNode *node);
 static void      parser_report_alloc_failure(Parser *parser, const char *context);
-static char     *parser_strdup_checked(Parser *parser, const char *value, const char *context);
-static AstNode  *parser_parse_directive(Parser *parser);
+static AstNode  *parser_parse_directive(Parser *parser, bool in_body);
 static TokenKind parser_peek_next_kind(Parser *parser);
 static bool      parser_should_parse_type_args(Parser *parser, TokenKind *follow_kind);
 static AstNode  *parser_expr_to_type(Parser *parser, AstNode *expr, AstList *generic_args);
@@ -65,20 +64,6 @@ static void parser_report_alloc_failure(Parser *parser, const char *context)
     parser_error(parser, token, context ? context : "out of memory");
 }
 
-static char *parser_strdup_checked(Parser *parser, const char *value, const char *context)
-{
-    if (!value)
-    {
-        return NULL;
-    }
-
-    char *copy = strdup(value);
-    if (!copy)
-    {
-        parser_report_alloc_failure(parser, context);
-    }
-    return copy;
-}
 static AstList *parser_alloc_list(Parser *parser)
 {
     AstList *list = malloc(sizeof(AstList));
@@ -150,7 +135,7 @@ static AstNode *parser_parse_stmt_block_top(Parser *parser)
     return block;
 }
 
-static AstNode *parser_parse_stmt_comptime_if(Parser *parser)
+static AstNode *parser_parse_stmt_comptime_if(Parser *parser, bool in_body)
 {
     if (!parser_consume(parser, TOKEN_KW_IF, "expected 'if' after '$'"))
     {
@@ -183,7 +168,8 @@ static AstNode *parser_parse_stmt_comptime_if(Parser *parser)
         return NULL;
     }
 
-    node->comptime_if_stmt.body = parser_parse_stmt_block_top(parser);
+    node->comptime_if_stmt.body =
+        in_body ? parser_parse_stmt_block(parser) : parser_parse_stmt_block_top(parser);
     if (!node->comptime_if_stmt.body)
     {
         parser_error_at_current(parser, "expected block after '$if' condition");
@@ -225,7 +211,8 @@ static AstNode *parser_parse_stmt_comptime_if(Parser *parser)
             }
         }
 
-        or_node->comptime_if_stmt.body = parser_parse_stmt_block_top(parser);
+        or_node->comptime_if_stmt.body =
+            in_body ? parser_parse_stmt_block(parser) : parser_parse_stmt_block_top(parser);
         if (!or_node->comptime_if_stmt.body)
         {
             parser_error_at_current(parser, "expected block after '$or'");
@@ -241,7 +228,7 @@ static AstNode *parser_parse_stmt_comptime_if(Parser *parser)
     return node;
 }
 
-static AstNode *parser_parse_directive(Parser *parser)
+static AstNode *parser_parse_directive(Parser *parser, bool in_body)
 {
     if (!parser_consume(parser, TOKEN_DOLLAR, "expected '$'"))
     {
@@ -250,7 +237,7 @@ static AstNode *parser_parse_directive(Parser *parser)
 
     if (parser_check(parser, TOKEN_KW_IF))
     {
-        return parser_parse_stmt_comptime_if(parser);
+        return parser_parse_stmt_comptime_if(parser, in_body);
     }
 
     Token *directive_token = parser->previous;
@@ -1049,7 +1036,13 @@ AstNode *parser_parse_stmt_top(Parser *parser)
         result = parser_parse_stmt_ext(parser, is_public);
         break;
     case TOKEN_KW_FWD:
-        result = parser_parse_stmt_fwd(parser, is_public);
+        if (is_public)
+        {
+            parser_error_at_current(parser, "'pub' cannot be applied to fwd statements");
+            parser_synchronize(parser);
+            return NULL;
+        }
+        result = parser_parse_stmt_fwd(parser);
         break;
     case TOKEN_KW_DEF:
         result = parser_parse_stmt_def(parser, is_public);
@@ -1090,7 +1083,7 @@ AstNode *parser_parse_stmt_top(Parser *parser)
         {
             parser_error_at_current(parser, "'pub' cannot precede compile-time directives");
         }
-        result = parser_parse_directive(parser);
+        result = parser_parse_directive(parser, false);
         break;
     default:
         if (is_public)
@@ -1131,7 +1124,7 @@ AstNode *parser_parse_stmt(Parser *parser)
     case TOKEN_L_BRACE:
         return parser_parse_stmt_block(parser);
     case TOKEN_DOLLAR:
-        return parser_parse_directive(parser);
+        return parser_parse_directive(parser, true);
     default:
         return parser_parse_stmt_expr(parser);
     }
@@ -1222,8 +1215,8 @@ AstNode *parser_parse_stmt_use(Parser *parser)
     return node;
 }
 
-// fwd [name ':'] module_alias '.' symbol_name ';'
-AstNode *parser_parse_stmt_fwd(Parser *parser, bool is_public)
+// fwd PATH ';' | fwd ALIAS ':' PATH ';' — mirrors use grammar; always publishes
+AstNode *parser_parse_stmt_fwd(Parser *parser)
 {
     if (!parser_consume(parser, TOKEN_KW_FWD, "expected 'fwd' keyword"))
     {
@@ -1236,10 +1229,8 @@ AstNode *parser_parse_stmt_fwd(Parser *parser, bool is_public)
         return NULL;
     }
 
-    node->fwd_stmt.name         = NULL;
-    node->fwd_stmt.module_alias = NULL;
-    node->fwd_stmt.symbol_name  = NULL;
-    node->fwd_stmt.is_public    = is_public;
+    node->fwd_stmt.path  = NULL;
+    node->fwd_stmt.alias = NULL;
 
     // parse first identifier
     char *first = parser_parse_identifier(parser);
@@ -1250,66 +1241,60 @@ AstNode *parser_parse_stmt_fwd(Parser *parser, bool is_public)
         return NULL;
     }
 
+    char *alias = NULL;
+    char *path  = NULL;
+
     if (parser_match(parser, TOKEN_COLON))
     {
-        // rename form: fwd local_name: module.symbol;
-        node->fwd_stmt.name = first;
-
-        char *alias = parser_parse_identifier(parser);
-        if (!alias)
+        // rename form: fwd alias: a.b.c;
+        alias      = first;
+        char *head = parser_parse_identifier(parser);
+        if (!head)
         {
-            parser_error_at_current(parser, "expected module alias after ':'");
-            parser_free_node(node);
-            return NULL;
-        }
-
-        if (!parser_consume(parser, TOKEN_DOT, "expected '.' after module alias"))
-        {
+            parser_error_at_current(parser, "expected path after alias colon");
             free(alias);
             parser_free_node(node);
             return NULL;
         }
-
-        char *sym_name = parser_parse_identifier(parser);
-        if (!sym_name)
-        {
-            parser_error_at_current(parser, "expected symbol name after '.'");
-            free(alias);
-            parser_free_node(node);
-            return NULL;
-        }
-
-        node->fwd_stmt.module_alias = alias;
-        node->fwd_stmt.symbol_name  = sym_name;
-    }
-    else if (parser_match(parser, TOKEN_DOT))
-    {
-        // same-name form: fwd module.symbol;
-        node->fwd_stmt.module_alias = first;
-
-        char *sym_name = parser_parse_identifier(parser);
-        if (!sym_name)
-        {
-            parser_error_at_current(parser, "expected symbol name after '.'");
-            parser_free_node(node);
-            return NULL;
-        }
-
-        node->fwd_stmt.symbol_name = sym_name;
-        node->fwd_stmt.name = parser_strdup_checked(parser, sym_name, "out of memory duplicating fwd name");
-        if (!node->fwd_stmt.name)
-        {
-            parser_free_node(node);
-            return NULL;
-        }
+        path = head;
     }
     else
     {
-        parser_error_at_current(parser, "expected '.' or ':' after identifier in fwd statement");
-        free(first);
-        parser_free_node(node);
-        return NULL;
+        path = first;
     }
+
+    // parse rest of dotted path
+    while (parser_match(parser, TOKEN_DOT))
+    {
+        char *next = parser_parse_identifier(parser);
+        if (!next)
+        {
+            parser_error_at_current(parser, "expected identifier after '.'");
+            free(alias);
+            free(path);
+            parser_free_node(node);
+            return NULL;
+        }
+
+        size_t len      = strlen(path) + strlen(next) + 2;
+        char  *new_path = malloc(len);
+        if (!new_path)
+        {
+            parser_report_alloc_failure(parser, "out of memory expanding fwd path");
+            free(alias);
+            free(path);
+            free(next);
+            parser_free_node(node);
+            return NULL;
+        }
+        snprintf(new_path, len, "%s.%s", path, next);
+        free(path);
+        free(next);
+        path = new_path;
+    }
+
+    node->fwd_stmt.path  = path;
+    node->fwd_stmt.alias = alias;
 
     if (!parser_consume(parser, TOKEN_SEMICOLON, "expected ';' after fwd statement"))
     {
@@ -1590,6 +1575,7 @@ AstNode *parser_parse_stmt_fun(Parser *parser, bool is_public)
             }
 
             param->param_stmt.is_variadic = false;
+            param->param_stmt.is_comptime = parser_match(parser, TOKEN_DOLLAR);
             param->param_stmt.name        = parser_parse_identifier(parser);
             if (!param->param_stmt.name)
             {
@@ -2093,88 +2079,7 @@ static char *parser_extract_brace_content(Parser *parser)
     return content;
 }
 
-static AsmSpec *parser_parse_asm_spec(Parser *parser)
-{
-    if (!parser_consume(parser, TOKEN_L_PAREN, "expected '(' for asm spec"))
-        return NULL;
-
-    AsmSpec *spec = malloc(sizeof(AsmSpec));
-    spec->count    = 0;
-    spec->capacity = 4;
-    spec->items    = malloc(sizeof(AsmSpecItem) * spec->capacity);
-
-    while (!parser_check(parser, TOKEN_R_PAREN) && !parser_is_at_end(parser))
-    {
-        if (parser_check(parser, TOKEN_IDENTIFIER))
-        {
-            char *kw = lexer_raw_value(parser->lexer, parser->current);
-            bool is_in  = strcmp(kw, "in") == 0;
-            bool is_out = strcmp(kw, "out") == 0;
-            bool is_clb = strcmp(kw, "clb") == 0;
-            free(kw);
-
-            if (spec->count >= spec->capacity)
-            {
-                spec->capacity *= 2;
-                spec->items = realloc(spec->items, sizeof(AsmSpecItem) * spec->capacity);
-            }
-
-            if (is_clb)
-            {
-                parser_advance(parser); // 'clb'
-                char *reg = lexer_raw_value(parser->lexer, parser->current);
-                parser_advance(parser); // register name
-                spec->items[spec->count].kind     = ASM_SPEC_CLB;
-                spec->items[spec->count].reg_name = reg;
-                spec->items[spec->count].var_name = NULL;
-                spec->items[spec->count].expr     = NULL;
-                spec->count++;
-            }
-            else if (is_in)
-            {
-                parser_advance(parser); // 'in'
-                char *reg = lexer_raw_value(parser->lexer, parser->current);
-                parser_advance(parser); // register name
-                parser_consume(parser, TOKEN_EQUAL, "expected '=' in asm spec");
-                AstNode *expr = parser_parse_expr(parser);
-                spec->items[spec->count].kind     = ASM_SPEC_IN;
-                spec->items[spec->count].reg_name = reg;
-                spec->items[spec->count].var_name = NULL;
-                spec->items[spec->count].expr     = expr;
-                spec->count++;
-            }
-            else if (is_out)
-            {
-                parser_advance(parser); // 'out'
-                char *var = lexer_raw_value(parser->lexer, parser->current);
-                parser_advance(parser); // binding name
-                parser_consume(parser, TOKEN_EQUAL, "expected '=' in asm spec");
-                char *reg = lexer_raw_value(parser->lexer, parser->current);
-                parser_advance(parser); // register name
-                spec->items[spec->count].kind     = ASM_SPEC_OUT;
-                spec->items[spec->count].reg_name = reg;
-                spec->items[spec->count].var_name = var;
-                spec->items[spec->count].expr     = NULL;
-                spec->count++;
-            }
-            else
-            {
-                parser_advance(parser);
-            }
-        }
-        else
-        {
-            parser_advance(parser);
-        }
-
-        if (parser_check(parser, TOKEN_COMMA))
-            parser_advance(parser);
-    }
-
-    parser_consume(parser, TOKEN_R_PAREN, "expected ')' after asm spec");
-    return spec;
-}
-
+// asm <isa> { ...raw body... } — ISA tag mandatory, body captured verbatim
 AstNode *parser_parse_stmt_mir(Parser *parser)
 {
     if (!parser_consume(parser, TOKEN_KW_ASM, "expected 'asm' keyword"))
@@ -2191,108 +2096,36 @@ AstNode *parser_parse_stmt_mir(Parser *parser)
     node->masm_stmt.content     = NULL;
     node->masm_stmt.isa_name    = NULL;
     node->masm_stmt.isa_content = NULL;
-    node->masm_stmt.spec        = NULL;
 
-    // new syntax: asm <isa_name> [(<spec>)] { ... }
-    if (parser_check(parser, TOKEN_IDENTIFIER))
+    if (!parser_check(parser, TOKEN_IDENTIFIER))
     {
-        char *ident = lexer_raw_value(parser->lexer, parser->current);
-        if (parser_is_isa_name(ident))
-        {
-            node->masm_stmt.isa_name = ident;
-            parser_advance(parser);
-
-            if (parser_check(parser, TOKEN_L_PAREN))
-            {
-                node->masm_stmt.spec = parser_parse_asm_spec(parser);
-            }
-
-            if (!parser_consume(parser, TOKEN_L_BRACE, "expected '{' after asm"))
-            {
-                ast_node_dnit(node);
-                free(node);
-                return NULL;
-            }
-
-            node->masm_stmt.isa_content = parser_extract_brace_content(parser);
-            if (!node->masm_stmt.isa_content)
-            {
-                ast_node_dnit(node);
-                free(node);
-                return NULL;
-            }
-
-            if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after asm block"))
-            {
-                ast_node_dnit(node);
-                free(node);
-                return NULL;
-            }
-
-            return node;
-        }
-        else
-        {
-            free(ident);
-        }
+        parser_error_at_current(parser, "expected ISA tag after 'asm'");
+        ast_node_dnit(node);
+        free(node);
+        return NULL;
     }
 
-    // portable asm: asm { ... }
-    if (!parser_consume(parser, TOKEN_L_BRACE, "expected '{' after 'asm'"))
+    char *ident = lexer_raw_value(parser->lexer, parser->current);
+    if (!parser_is_isa_name(ident))
+    {
+        parser_error_at_current(parser, "unknown ISA tag in asm block");
+        free(ident);
+        ast_node_dnit(node);
+        free(node);
+        return NULL;
+    }
+    node->masm_stmt.isa_name = ident;
+    parser_advance(parser);
+
+    if (!parser_consume(parser, TOKEN_L_BRACE, "expected '{' after asm ISA tag"))
     {
         ast_node_dnit(node);
         free(node);
         return NULL;
     }
 
-    // old syntax: asm { x86_64 { ... } }
-    if (parser_check(parser, TOKEN_IDENTIFIER))
-    {
-        char *ident = lexer_raw_value(parser->lexer, parser->current);
-        if (parser_is_isa_name(ident))
-        {
-            node->masm_stmt.isa_name = ident;
-            parser_advance(parser);
-
-            if (!parser_consume(parser, TOKEN_L_BRACE, "expected '{' after ISA name"))
-            {
-                ast_node_dnit(node);
-                free(node);
-                return NULL;
-            }
-
-            node->masm_stmt.isa_content = parser_extract_brace_content(parser);
-            if (!node->masm_stmt.isa_content)
-            {
-                ast_node_dnit(node);
-                free(node);
-                return NULL;
-            }
-
-            if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after ISA block"))
-            {
-                ast_node_dnit(node);
-                free(node);
-                return NULL;
-            }
-
-            if (!parser_consume(parser, TOKEN_R_BRACE, "expected '}' after asm block"))
-            {
-                ast_node_dnit(node);
-                free(node);
-                return NULL;
-            }
-
-            return node;
-        }
-        else
-        {
-            free(ident);
-        }
-    }
-
-    node->masm_stmt.content = parser_extract_brace_content(parser);
-    if (!node->masm_stmt.content)
+    node->masm_stmt.isa_content = parser_extract_brace_content(parser);
+    if (!node->masm_stmt.isa_content)
     {
         ast_node_dnit(node);
         free(node);
@@ -3668,7 +3501,8 @@ AstList *parser_parse_parameter_list(Parser *parser)
             return NULL;
         }
 
-        param->param_stmt.name = parser_parse_identifier(parser);
+        param->param_stmt.is_comptime = parser_match(parser, TOKEN_DOLLAR);
+        param->param_stmt.name        = parser_parse_identifier(parser);
         if (!param->param_stmt.name)
         {
             ast_node_dnit(param);
