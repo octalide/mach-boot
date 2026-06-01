@@ -1730,37 +1730,10 @@ static MasmOperand lower_expr(Masm *masm, MasmSection *text, AstNode *expr, Lowe
             uint8_t zero = 0;
             masm_section_append_data(rodata, &zero, 1);
 
-            // For double-quoted str literal: build a 16-byte str record { u32 len, *u8 data }
-            // in .rodata and return its address (aggregate convention).
-            char rec_label[32];
-            snprintf(rec_label, sizeof(rec_label), ".Lstrrec_%d", (*ctx->str_counter)++);
-
-            // Align to 8 (str record alignment is 8 due to the *u8 field)
-            while (rodata->data_size % 8 != 0)
-            {
-                masm_section_append_zero(rodata, 1);
-            }
-
-            MasmSymbol *rec_sym   = masm_symbol_create(rec_label, MASM_SYMBOL_DATA, MASM_BIND_LOCAL);
-            rec_sym->section_name = strdup(".rodata");
-            rec_sym->offset       = rodata->data_size;
-            rec_sym->size         = 16;
-            masm_add_symbol(masm, rec_sym);
-
-            // len: u32 at offset 0
-            uint32_t len_u32 = (uint32_t)len;
-            masm_section_append_data(rodata, &len_u32, 4);
-            // 4 bytes padding so data field is 8-byte aligned
-            masm_section_append_zero(rodata, 4);
-            // data: *u8 at offset 8 — placeholder, relocated to bytes_label
-            size_t  data_field_offset = rodata->data_size;
-            uint64_t zero_ptr         = 0;
-            masm_section_append_data(rodata, &zero_ptr, 8);
-            masm_section_append_reloc(rodata, data_field_offset, bytes_label, 0);
-
-            // Return the address of the str record (aggregate-by-pointer convention)
+            // Thin-string dialect: a string literal is a *u8 pointing at its
+            // null-terminated bytes (sema types it *u8). Return that address.
             MasmOperand res = isa_result(ctx, 8);
-            MasmOperand src = masm_operand_label(rec_label);
+            MasmOperand src = masm_operand_label(bytes_label);
             masm_section_append_inst(text, masm_inst_2(MASM_IR_ADDR, res, src));
             return res;
         }
@@ -2474,7 +2447,7 @@ static char *resolve_asm_locals(const char *content, LowerContext *ctx)
                 {
                     char subst[64];
                     int32_t abs_off = var->offset < 0 ? -var->offset : var->offset;
-                    const char *sign = var->offset < 0 ? " - " : " + ";
+                    const char *sign = var->offset < 0 ? "-" : "+";
                     snprintf(subst, sizeof(subst), "[rbp%s%d]", sign, abs_off);
                     size_t slen = strlen(subst);
                     while (rlen + slen + 1 > cap)
