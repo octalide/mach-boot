@@ -12,7 +12,6 @@ typedef enum TokenKind
     TOKEN_LIT_FLOAT,
     TOKEN_LIT_CHAR,
     TOKEN_LIT_STRING,
-    TOKEN_LIT_ZSTR,
 
     TOKEN_IDENTIFIER,
 

@@ -31,6 +31,13 @@ void sema_add_module_root(Sema *sema, const char *module_prefix, const char *src
 // set file context for error reporting (call before analyzing a file)
 void sema_set_file_context(Sema *sema, const char *file_path, const char *source);
 
+// comptime metadata accessors (consumed by the $mach.* evaluator)
+// each returns a borrowed string or NULL when the datum is unknown
+const char *sema_project_id(const Sema *sema);
+const char *sema_src_root(const Sema *sema);
+const char *sema_current_file(const Sema *sema);
+const char *sema_current_module(const Sema *sema);
+
 // analyze ast and populate types/symbols
 // returns 0 on success, -1 on error
 int sema_analyze(Sema *sema, AstNode *ast);
