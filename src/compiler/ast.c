@@ -57,9 +57,8 @@ void ast_node_dnit(AstNode *node)
         break;
 
     case AST_STMT_FWD:
-        free(node->fwd_stmt.name);
-        free(node->fwd_stmt.module_alias);
-        free(node->fwd_stmt.symbol_name);
+        free(node->fwd_stmt.path);
+        free(node->fwd_stmt.alias);
         break;
 
     case AST_STMT_DEF:
@@ -284,22 +283,6 @@ void ast_node_dnit(AstNode *node)
         {
             free(node->masm_stmt.isa_content);
         }
-        if (node->masm_stmt.spec)
-        {
-            for (int i = 0; i < node->masm_stmt.spec->count; i++)
-            {
-                AsmSpecItem *item = &node->masm_stmt.spec->items[i];
-                free(item->reg_name);
-                free(item->var_name);
-                if (item->expr)
-                {
-                    ast_node_dnit(item->expr);
-                    free(item->expr);
-                }
-            }
-            free(node->masm_stmt.spec->items);
-            free(node->masm_stmt.spec);
-        }
         break;
 
     case AST_COMPTIME:
@@ -389,7 +372,7 @@ void ast_node_dnit(AstNode *node)
         break;
 
     case AST_EXPR_LIT:
-        if (node->lit_expr.kind == TOKEN_LIT_STRING || node->lit_expr.kind == TOKEN_LIT_ZSTR)
+        if (node->lit_expr.kind == TOKEN_LIT_STRING)
         {
             free(node->lit_expr.string_val);
         }
@@ -645,10 +628,8 @@ static AstNode *ast_clone_checked(const AstNode *node)
         break;
 
     case AST_STMT_FWD:
-        clone->fwd_stmt.name         = ast_strdup(node->fwd_stmt.name);
-        clone->fwd_stmt.module_alias = ast_strdup(node->fwd_stmt.module_alias);
-        clone->fwd_stmt.symbol_name  = ast_strdup(node->fwd_stmt.symbol_name);
-        clone->fwd_stmt.is_public    = node->fwd_stmt.is_public;
+        clone->fwd_stmt.path  = ast_strdup(node->fwd_stmt.path);
+        clone->fwd_stmt.alias = ast_strdup(node->fwd_stmt.alias);
         break;
 
     case AST_STMT_DEF:
@@ -705,6 +686,7 @@ static AstNode *ast_clone_checked(const AstNode *node)
         clone->param_stmt.name        = ast_strdup(node->param_stmt.name);
         clone->param_stmt.type        = ast_clone_checked(node->param_stmt.type);
         clone->param_stmt.is_variadic = node->param_stmt.is_variadic;
+        clone->param_stmt.is_comptime = node->param_stmt.is_comptime;
         break;
 
     case AST_STMT_BLOCK:
@@ -762,22 +744,6 @@ static AstNode *ast_clone_checked(const AstNode *node)
         {
             clone->masm_stmt.isa_content = strdup(node->masm_stmt.isa_content);
         }
-        if (node->masm_stmt.spec)
-        {
-            AsmSpec *spec = malloc(sizeof(AsmSpec));
-            spec->count    = node->masm_stmt.spec->count;
-            spec->capacity = spec->count;
-            spec->items    = malloc(sizeof(AsmSpecItem) * spec->capacity);
-            for (int i = 0; i < spec->count; i++)
-            {
-                AsmSpecItem *src_item = &node->masm_stmt.spec->items[i];
-                spec->items[i].kind     = src_item->kind;
-                spec->items[i].reg_name = src_item->reg_name ? strdup(src_item->reg_name) : NULL;
-                spec->items[i].var_name = src_item->var_name ? strdup(src_item->var_name) : NULL;
-                spec->items[i].expr     = src_item->expr ? ast_clone(src_item->expr) : NULL;
-            }
-            clone->masm_stmt.spec = spec;
-        }
         break;
 
     case AST_EXPR_BINARY:
@@ -830,7 +796,6 @@ static AstNode *ast_clone_checked(const AstNode *node)
             clone->lit_expr.char_val = node->lit_expr.char_val;
             break;
         case TOKEN_LIT_STRING:
-        case TOKEN_LIT_ZSTR:
             clone->lit_expr.string_val = ast_strdup(node->lit_expr.string_val);
             break;
         default:
@@ -975,7 +940,14 @@ void ast_print(AstNode *node, int indent)
         break;
 
     case AST_STMT_FWD:
-        printf("FWD %s: %s.%s\n", node->fwd_stmt.name, node->fwd_stmt.module_alias, node->fwd_stmt.symbol_name);
+        if (node->fwd_stmt.alias)
+        {
+            printf("FWD %s: %s\n", node->fwd_stmt.alias, node->fwd_stmt.path);
+        }
+        else
+        {
+            printf("FWD %s\n", node->fwd_stmt.path);
+        }
         break;
 
     case AST_STMT_DEF:
@@ -1079,7 +1051,7 @@ void ast_print(AstNode *node, int indent)
         break;
 
     case AST_STMT_PARAM:
-        printf("PARAM %s:\n", node->param_stmt.name);
+        printf("PARAM %s%s:\n", node->param_stmt.is_comptime ? "$" : "", node->param_stmt.name);
         ast_print(node->param_stmt.type, indent + 1);
         break;
 
@@ -1192,11 +1164,11 @@ void ast_print(AstNode *node, int indent)
         break;
 
     case AST_STMT_MASM:
-        printf("MIR_BLOCK\n");
-        if (node->masm_stmt.content)
+        printf("ASM %s\n", node->masm_stmt.isa_name ? node->masm_stmt.isa_name : "<isa>");
+        if (node->masm_stmt.isa_content)
         {
             print_indent(indent + 1);
-            printf("content: %s\n", node->masm_stmt.content);
+            printf("body: %s\n", node->masm_stmt.isa_content);
         }
         break;
 
@@ -1271,11 +1243,6 @@ void ast_print(AstNode *node, int indent)
             printf("STRING \"");
             print_escaped_string(stdout, node->lit_expr.string_val);
             printf("\"\n");
-            break;
-        case TOKEN_LIT_ZSTR:
-            printf("ZSTR `");
-            print_escaped_string(stdout, node->lit_expr.string_val);
-            printf("`\n");
             break;
         default:
             printf("???\n");
@@ -1551,7 +1518,14 @@ static void ast_print_to_file(AstNode *node, FILE *file, int indent)
         ast_print_to_file(node->ext_stmt.type, file, indent + 1);
         break;
     case AST_STMT_FWD:
-        fprintf(file, "FWD %s: %s.%s\n", node->fwd_stmt.name, node->fwd_stmt.module_alias, node->fwd_stmt.symbol_name);
+        if (node->fwd_stmt.alias)
+        {
+            fprintf(file, "FWD %s: %s\n", node->fwd_stmt.alias, node->fwd_stmt.path);
+        }
+        else
+        {
+            fprintf(file, "FWD %s\n", node->fwd_stmt.path);
+        }
         break;
     case AST_STMT_DEF:
         fprintf(file, "DEF %s:\n", node->def_stmt.name);
@@ -1643,7 +1617,7 @@ static void ast_print_to_file(AstNode *node, FILE *file, int indent)
         ast_print_to_file(node->field_stmt.type, file, indent + 1);
         break;
     case AST_STMT_PARAM:
-        fprintf(file, "PARAM %s:\n", node->param_stmt.name);
+        fprintf(file, "PARAM %s%s:\n", node->param_stmt.is_comptime ? "$" : "", node->param_stmt.name);
         ast_print_to_file(node->param_stmt.type, file, indent + 1);
         break;
     case AST_STMT_BLOCK:
@@ -1756,11 +1730,11 @@ static void ast_print_to_file(AstNode *node, FILE *file, int indent)
         fprintf(file, "CNT\n");
         break;
     case AST_STMT_MASM:
-        fprintf(file, "MIR_BLOCK\n");
-        if (node->masm_stmt.content)
+        fprintf(file, "ASM %s\n", node->masm_stmt.isa_name ? node->masm_stmt.isa_name : "<isa>");
+        if (node->masm_stmt.isa_content)
         {
             print_indent_to_file(file, indent + 1);
-            fprintf(file, "content: %s\n", node->masm_stmt.content);
+            fprintf(file, "body: %s\n", node->masm_stmt.isa_content);
         }
         break;
     case AST_EXPR_BINARY:
@@ -1827,11 +1801,6 @@ static void ast_print_to_file(AstNode *node, FILE *file, int indent)
             fprintf(file, "STRING \"");
             print_escaped_string(file, node->lit_expr.string_val);
             fprintf(file, "\"\n");
-            break;
-        case TOKEN_LIT_ZSTR:
-            fprintf(file, "ZSTR `");
-            print_escaped_string(file, node->lit_expr.string_val);
-            fprintf(file, "`\n");
             break;
         default:
             fprintf(file, "???\n");

@@ -131,12 +131,4 @@ int type_mangle(Type *type, char *buffer, size_t buffer_size);
 //   ptr reg_save_area;
 Type *type_get_builtin_va_list(void);
 
-// str: the type of double-quoted string literals.
-// the only complex (non-primitive) builtin type in mach; the language has it
-// because string literals are syntax that must produce a typed value, and that
-// value is record-shaped.
-//   u32  len;
-//   *u8  data;
-Type *type_get_builtin_str(void);
-
 #endif // TYPE_H

@@ -29,13 +29,11 @@ Token *lexer_parse_identifier(Lexer *lexer);
 Token *lexer_parse_lit_number(Lexer *lexer);
 Token *lexer_parse_lit_char(Lexer *lexer);
 Token *lexer_parse_lit_string(Lexer *lexer);
-Token *lexer_parse_lit_zstr(Lexer *lexer);
 
 unsigned long long lexer_eval_lit_int(Lexer *lexer, Token *token);
 double             lexer_eval_lit_float(Lexer *lexer, Token *token);
 char               lexer_eval_lit_char(Lexer *lexer, Token *token);
 char              *lexer_eval_lit_string(Lexer *lexer, Token *token);
-char              *lexer_eval_lit_zstr(Lexer *lexer, Token *token);
 char              *lexer_raw_value(Lexer *lexer, Token *token);
 
 Token *lexer_emit(Lexer *lexer, TokenKind kind, int len);
