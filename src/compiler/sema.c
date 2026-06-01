@@ -454,6 +454,11 @@ SymbolTable *sema_get_main_module_table(Sema *sema)
     return (sema && sema->main_module) ? sema->main_module->table : NULL;
 }
 
+const char *sema_get_main_module_path(Sema *sema)
+{
+    return (sema && sema->main_module) ? sema->main_module->module_path : NULL;
+}
+
 int sema_get_loaded_modules(Sema *sema, SemaLoadedModule *modules, int max_count)
 {
     if (!sema || !modules || max_count <= 0)

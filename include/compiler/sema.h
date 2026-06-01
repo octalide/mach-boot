@@ -45,6 +45,9 @@ int sema_analyze(Sema *sema, AstNode *ast);
 // get the current (entry) module's symbol table (for codegen)
 SymbolTable *sema_get_main_module_table(Sema *sema);
 
+// get the main (entry) module's fully qualified module path (for codegen)
+const char *sema_get_main_module_path(Sema *sema);
+
 // loaded module info for codegen
 typedef struct SemaLoadedModule
 {

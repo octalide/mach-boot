@@ -27,6 +27,50 @@ static bool str_ends_with(const char *s, const char *suffix)
     return memcmp(s + (sl - su), suffix, su) == 0;
 }
 
+// build an object path under obj_base mirroring a dotted module FQN:
+// FQN "a.b.c" -> "<obj_base>/a/b/c.o". the returned path is heap-allocated.
+// the parent directory of the object is created with `mkdir -p`.
+static char *build_module_obj_path(const char *obj_base, const char *fqn)
+{
+    size_t base_len = strlen(obj_base);
+    size_t fqn_len  = strlen(fqn);
+    // "<obj_base>" + '/' + fqn(dots->slashes) + ".o" + '\0'
+    char  *path     = malloc(base_len + 1 + fqn_len + 2 + 1);
+    if (!path)
+    {
+        return NULL;
+    }
+
+    memcpy(path, obj_base, base_len);
+    path[base_len] = '/';
+
+    char *dst = path + base_len + 1;
+    for (const char *src = fqn; *src; src++)
+    {
+        *dst++ = (*src == '.') ? '/' : *src;
+    }
+    *dst = '\0';
+
+    // ensure the object's parent directory exists (FQN may be nested)
+    char *parent   = strdup(path);
+    char *last_sep = strrchr(parent, '/');
+    if (last_sep)
+    {
+        *last_sep = '\0';
+        char *mkdir_cmd = malloc(strlen(parent) + 32);
+        if (mkdir_cmd)
+        {
+            sprintf(mkdir_cmd, "mkdir -p %s 2>/dev/null", parent);
+            system(mkdir_cmd);
+            free(mkdir_cmd);
+        }
+    }
+    free(parent);
+
+    strcat(path, ".o");
+    return path;
+}
+
 void cmd_build_help(FILE *stream)
 {
     fprintf(stream, "usage: mach build <project|file> [options]\n");
@@ -423,78 +467,161 @@ int cmd_build_handle(int argc, char **argv)
         return 1;
     }
 
-    // lower to MASM - first the main module
-    Masm *masm = masm_lower_module(ast, sema_get_main_module_table(sema));
-    if (!masm)
-    {
-        fprintf(stderr, "error: lowering to MASM failed\n");
-        sema_destroy(sema);
+    // lower to MASM and emit objects.
+    // - single-file mode: lower the main module only and emit one object at `-o`
+    //   (or default "output").
+    // - project mode: lower EACH module to its own Masm and emit one relocatable
+    //   object per module under <dir_out>/<artifacts>/obj, with the path mirroring
+    //   the module FQN (dots -> slashes); then link/archive the full set.
+    const char *final_output = output_file;
 
-        // clean up config after sema is destroyed
+    // collected object paths to link/archive (project mode); each is heap-allocated.
+    char **obj_paths   = NULL;
+    int    obj_count   = 0;
+    int    obj_cap     = 0;
+    char  *obj_base    = NULL;
+
+    if (is_project && project_root)
+    {
+        const char *dir_out   = (config && config->dir_out) ? config->dir_out : "out";
+        const char *artifacts = target_artifacts ? target_artifacts : "default";
+
+        size_t base_len = strlen(project_root) + 1 + strlen(dir_out) + 1 + strlen(artifacts) + 5;
+        obj_base        = malloc(base_len);
+        if (!obj_base)
+        {
+            fprintf(stderr, "error: out of memory\n");
+            sema_destroy(sema);
+            if (config)
+            {
+                config_dnit(config);
+                free(config);
+            }
+            parser_dnit(&parser);
+            lexer_dnit(&lexer);
+            free(source);
+            free(project_id);
+            return 1;
+        }
+        sprintf(obj_base, "%s/%s/%s/obj", project_root, dir_out, artifacts);
+    }
+
+    // collect (ast, table, fqn) for every module to lower: main first, then imports.
+    SemaLoadedModule loaded[256];
+    int              loaded_count = sema_get_loaded_modules(sema, loaded, 256);
+
+    int total_modules = 1 + loaded_count;
+    obj_cap           = total_modules;
+    obj_paths         = malloc(sizeof(char *) * (obj_cap > 0 ? obj_cap : 1));
+    if (!obj_paths)
+    {
+        fprintf(stderr, "error: out of memory\n");
+        free(obj_base);
+        sema_destroy(sema);
         if (config)
         {
             config_dnit(config);
             free(config);
         }
-
         parser_dnit(&parser);
         lexer_dnit(&lexer);
         free(source);
+        free(project_id);
         return 1;
     }
 
-    // lower all imported modules
-    SemaLoadedModule loaded[256];
-    int              loaded_count = sema_get_loaded_modules(sema, loaded, 256);
-    for (int i = 0; i < loaded_count; i++)
+    bool emit_failed = false;
+    for (int i = 0; i < total_modules; i++)
     {
-        Masm *imported_masm = masm_lower_module(loaded[i].ast, loaded[i].table);
-        if (imported_masm)
+        AstNode     *mod_ast = (i == 0) ? ast : loaded[i - 1].ast;
+        SymbolTable *mod_tab = (i == 0) ? sema_get_main_module_table(sema) : loaded[i - 1].table;
+        const char  *mod_fqn = (i == 0) ? sema_get_main_module_path(sema) : loaded[i - 1].module_path;
+
+        // determine the object output path for this module.
+        char       *mod_obj_owned = NULL;
+        const char *mod_obj       = NULL;
+        if (is_project && project_root)
         {
-            masm_merge(masm, imported_masm);
-            masm_destroy(imported_masm);
+            const char *fqn = mod_fqn;
+            // fall back to the project id for the main module if its FQN is empty;
+            // a non-main module without an FQN cannot be placed and is skipped.
+            if (!fqn || fqn[0] == '\0')
+            {
+                if (i == 0 && project_id)
+                {
+                    fqn = project_id;
+                }
+                else
+                {
+                    fprintf(stderr, "warning: skipping module with empty module path\n");
+                    continue;
+                }
+            }
+
+            mod_obj_owned = build_module_obj_path(obj_base, fqn);
+            if (!mod_obj_owned)
+            {
+                fprintf(stderr, "error: out of memory\n");
+                emit_failed = true;
+                break;
+            }
+            mod_obj = mod_obj_owned;
+        }
+        else
+        {
+            // single-file / non-project mode: emit the one object at the output path.
+            mod_obj = output_file;
+        }
+
+        Masm *mod_masm = masm_lower_module(mod_ast, mod_tab);
+        if (!mod_masm)
+        {
+            fprintf(stderr, "error: lowering to MASM failed\n");
+            free(mod_obj_owned);
+            emit_failed = true;
+            break;
+        }
+
+        int rc = masm_emit_object(mod_masm, mod_obj);
+        masm_destroy(mod_masm);
+        if (rc < 0)
+        {
+            fprintf(stderr, "error: failed to emit object file\n");
+            free(mod_obj_owned);
+            emit_failed = true;
+            break;
+        }
+
+        if (is_project && project_root)
+        {
+            obj_paths[obj_count++] = mod_obj_owned;
+        }
+
+        // single-file mode emits exactly one object; stop after the main module.
+        if (!(is_project && project_root))
+        {
+            break;
         }
     }
 
-    // emit object (ET_REL) first.
-    // - single-file mode: output is the object at `-o` (or default "output")
-    // - project mode: emit to <dir_out>/<artifacts>/obj/<id>.o, then link/archive
-    const char *final_output = output_file;
-    const char *obj_output   = output_file;
-    char        obj_path[2048];
-    if (is_project && project_root)
+    if (emit_failed)
     {
-        const char *dir_out = (config && config->dir_out) ? config->dir_out : "out";
-        const char *artifacts = target_artifacts ? target_artifacts : "default";
-        const char *obj_name = project_id ? project_id : "output";
-
-        char obj_dir[2048];
-        snprintf(obj_dir, sizeof(obj_dir), "%s/%s/%s/obj", project_root, dir_out, artifacts);
-
-        char mkdir_obj[2560];
-        snprintf(mkdir_obj, sizeof(mkdir_obj), "mkdir -p %s 2>/dev/null", obj_dir);
-        system(mkdir_obj);
-
-        snprintf(obj_path, sizeof(obj_path), "%s/%s.o", obj_dir, obj_name);
-        obj_output = obj_path;
-    }
-
-    if (masm_emit_object(masm, obj_output) < 0)
-    {
-        fprintf(stderr, "error: failed to emit object file\n");
-        masm_destroy(masm);
+        for (int i = 0; i < obj_count; i++)
+        {
+            free(obj_paths[i]);
+        }
+        free(obj_paths);
+        free(obj_base);
         sema_destroy(sema);
-
-        // clean up config after sema is destroyed
         if (config)
         {
             config_dnit(config);
             free(config);
         }
-
         parser_dnit(&parser);
         lexer_dnit(&lexer);
         free(source);
+        free(project_id);
         return 1;
     }
 
@@ -517,68 +644,102 @@ int cmd_build_handle(int argc, char **argv)
             mode = target->mode->kind;
         }
 
+        // assemble the link/archive command. the object list can be large
+        // (~hundreds of modules), so size the buffer dynamically to avoid
+        // truncation of the object set.
+        size_t objs_len = 0;
+        for (int i = 0; i < obj_count; i++)
+        {
+            objs_len += strlen(obj_paths[i]) + 1; // path + separating space
+        }
+
+        // prefix + output path + objects + slack for flags/null
+        size_t cmd_cap = 64 + strlen(final_output) + objs_len + 64;
+        char  *cmd     = malloc(cmd_cap);
+        if (!cmd)
+        {
+            fprintf(stderr, "error: out of memory\n");
+            for (int i = 0; i < obj_count; i++)
+            {
+                free(obj_paths[i]);
+            }
+            free(obj_paths);
+            free(obj_base);
+            sema_destroy(sema);
+            if (config)
+            {
+                config_dnit(config);
+                free(config);
+            }
+            parser_dnit(&parser);
+            lexer_dnit(&lexer);
+            free(source);
+            free(project_id);
+            return 1;
+        }
+
+        (void)remove(final_output);
+
+        size_t pos = 0;
         if (mode == TARGET_MODE_LIBRARY)
         {
-            // build a static archive
-            (void)remove(final_output);
-            char ar_cmd[4096];
-            snprintf(ar_cmd, sizeof(ar_cmd), "ar rcs %s %s", final_output, obj_output);
-            int rc = system(ar_cmd);
-            if (rc != 0)
-            {
-                fprintf(stderr, "error: archiving failed (%d)\n", rc);
-                masm_destroy(masm);
-                sema_destroy(sema);
-                if (config)
-                {
-                    config_dnit(config);
-                    free(config);
-                }
-                parser_dnit(&parser);
-                lexer_dnit(&lexer);
-                free(source);
-                return 1;
-            }
-
-            // keep the intermediate object; it can help debugging.
+            pos += (size_t)snprintf(cmd + pos, cmd_cap - pos, "ar rcs %s", final_output);
         }
         else
         {
-            // link an executable (or shared in the future)
-            // default: use cc as the linker driver; we provide our own _start.
-            (void)remove(final_output);
-            char link_cmd[4096];
-            // note: -no-pie is important on many distros defaulting to PIE
-            snprintf(link_cmd, sizeof(link_cmd), "cc -nostdlib -no-pie -Wl,-e,_start -o %s %s", final_output, obj_output);
-            int rc = system(link_cmd);
-            if (rc != 0)
-            {
-                fprintf(stderr, "error: linking failed (%d)\n", rc);
-                masm_destroy(masm);
-                sema_destroy(sema);
-                if (config)
-                {
-                    config_dnit(config);
-                    free(config);
-                }
-                parser_dnit(&parser);
-                lexer_dnit(&lexer);
-                free(source);
-                return 1;
-            }
+            // note: -no-pie is important on many distros defaulting to PIE;
+            // we provide our own _start, so link without crt.
+            pos += (size_t)snprintf(cmd + pos, cmd_cap - pos, "cc -nostdlib -no-pie -Wl,-e,_start -o %s", final_output);
+        }
+        for (int i = 0; i < obj_count; i++)
+        {
+            pos += (size_t)snprintf(cmd + pos, cmd_cap - pos, " %s", obj_paths[i]);
+        }
 
-            // ensure executable bit when linking through cc without crt
-            if (!str_ends_with(final_output, ".a") && !str_ends_with(final_output, ".o"))
+        int rc = system(cmd);
+        free(cmd);
+        if (rc != 0)
+        {
+            fprintf(stderr, "error: %s failed (%d)\n", mode == TARGET_MODE_LIBRARY ? "archiving" : "linking", rc);
+            for (int i = 0; i < obj_count; i++)
             {
-                char chmod_cmd[4096];
-                snprintf(chmod_cmd, sizeof(chmod_cmd), "chmod +x %s 2>/dev/null", final_output);
+                free(obj_paths[i]);
+            }
+            free(obj_paths);
+            free(obj_base);
+            sema_destroy(sema);
+            if (config)
+            {
+                config_dnit(config);
+                free(config);
+            }
+            parser_dnit(&parser);
+            lexer_dnit(&lexer);
+            free(source);
+            free(project_id);
+            return 1;
+        }
+
+        // ensure executable bit when linking through cc without crt
+        if (mode != TARGET_MODE_LIBRARY && !str_ends_with(final_output, ".a") && !str_ends_with(final_output, ".o"))
+        {
+            char *chmod_cmd = malloc(strlen(final_output) + 32);
+            if (chmod_cmd)
+            {
+                sprintf(chmod_cmd, "chmod +x %s 2>/dev/null", final_output);
                 (void)system(chmod_cmd);
+                free(chmod_cmd);
             }
         }
     }
 
     // cleanup
-    masm_destroy(masm);
+    for (int i = 0; i < obj_count; i++)
+    {
+        free(obj_paths[i]);
+    }
+    free(obj_paths);
+    free(obj_base);
     sema_destroy(sema);
 
     // clean up config after sema is destroyed
