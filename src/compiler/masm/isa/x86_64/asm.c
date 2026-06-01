@@ -6,6 +6,9 @@
 #include <string.h>
 #include <stdio.h>
 
+static char *trim_leading(char *s);
+static void trim_trailing(char *s);
+
 // parse register name to operand
 static MasmOperand parse_reg(const char *name, uint8_t ptr_size)
 {
@@ -110,6 +113,15 @@ static MasmOperand parse_operand(const char *str, uint8_t ptr_size)
             {
                 *sep    = '\0';
                 off_str = sep + 1;
+            }
+
+            // local substitution emits spaced operands (e.g. "[rbp - 8]"); trim them
+            reg_str = trim_leading(reg_str);
+            trim_trailing(reg_str);
+            if (off_str)
+            {
+                off_str = trim_leading(off_str);
+                trim_trailing(off_str);
             }
 
             MasmOperand base = parse_reg(reg_str, ptr_size);
