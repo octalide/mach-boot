@@ -12,7 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install clang
         run: sudo apt-get update && sudo apt-get install -y clang
@@ -24,7 +24,7 @@ jobs:
         run: strip out/bin/cmach
 
       - name: Upload release binary
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: out/bin/cmach
           body: |
